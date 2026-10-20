@@ -5,8 +5,28 @@ build-backend = "hatchling.build"
 [project]
 name = "felops"
 version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = ["fastapi", "uvicorn"]
+requires-python = ">=3.12,<3.13"
+dependencies = ["fastapi==0.156.1", "uvicorn==0.54.0"]
+
+[project.optional-dependencies]
+dev = ["ruff==0.17.1", "import-linter==2.15", "pytest==9.1.1", "httpx2==2.15.1"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/felops"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.importlinter]
+root_package = "felops"
+
+[[tool.importlinter.contracts]]
+name = "Orchestrator depends only on ports and domain"
+type = "forbidden"
+source_modules = ["felops.orchestrator"]
+forbidden_modules = ["felops.adapters", "felops.api", "felops.app", "felops.services"]

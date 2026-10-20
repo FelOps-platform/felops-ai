@@ -218,8 +218,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-# Project guidelines
-tree.txt
-ai_system_design_and_architecture.md
-Felops AI Repo — Execution Plan.md
