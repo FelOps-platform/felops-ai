@@ -1,0 +1,84 @@
+felops-ai/
+├── pyproject.toml            # P0·0.1 — deps, ruff, mypy, pytest, import-linter contracts
+├── Makefile                  # P0·0.2 — up, down, lint, test
+├── Dockerfile                # P0·0.2 — one image. api and both mocks run it with different commands
+├── docker-compose.yml        # P0·0.2 — api, postgres, qdrant, mock-mcp (stub) · mock-backend from 0.8
+├── .env.example              # P0 — LLM key, DB, Qdrant URLs
+├── README.md                 # P0 — boot + demo steps
+├── .github/workflows/ci.yml  # P0·0.1 — lint, unit, contract · nightly e2e from P5
+│
+├── config/                   # swap by config, not code (§5.2). Factory input.
+│   ├── default.yaml          # P0·0.7 — llm, vector, embedding, retrieval, memory keys
+│   └── subagents/            # SubAgentSpec manifests — P2 support, P9 billing, P10 sales
+│
+├── prompts/                  # file PromptStore source (§5.2, dev). Prompt edits without code.
+│   ├── platform/             # P0·0.7 — default, router, responder templates (§2.3 platform default)
+│   └── customer_support/     # P1·1.6 persona + wizard block · P9/P10 new sub-agents
+│
+├── fixtures/                 # P0·0.10 — AR+EN docs, 20 Q&A, 6 action specs. Fixed seed data.
+│
+├── mocks/                    # our stubs for the backend team's side. Never blocked.
+│   ├── mock_backend/         # P0·0.8 — token endpoint, webhook sink, config fixtures (§7.1)
+│   └── mock_mcp/             # P0·0.2 health stub · P1·1.10 — 6 actions · +billing P9 · +sales P10
+│
+├── scripts/                  # one-command demos and failure drills
+│   └── demo_p1.sh            # P1 — then seed/reset/kill P5
+│
+├── evals/                    # measured gate for every swap (§5). CI blocks regressions here.
+│
+├── console/                  # empty till P5·5.2 — the demo surface for the presentation
+│
+├── docs/                     # ADRs now · runbook + openapi snapshot P10
+│
+├── tests/                    # §5 enforcement lives here
+│
+└── src/felops/
+    ├── domain/               # shared language, pure logic (§4.1 inv.7). No I/O. Anyone may import.
+    │   ├── workspace.py      # P0·0.3 — WorkspaceContext, Namespace (§2.3)
+    │   ├── agent.py          # P0·0.3 — AgentRef, constant customer_support
+    │   ├── state.py          # P0·0.3 — AgentState (§6.1)
+    │   └── events.py         # P0·0.3 — event envelope (§7.2)
+    │   # grows: tools.py P1 (pure effective_tools) · policy P2 · jobs P3 · model_policy P9
+    │
+    ├── ports/                # Protocols only (§5.1). The swap points. Import-linter anchor.
+    │   ├── llm.py            # P0·0.4 — LLMProvider
+    │   ├── prompts.py        # P0·0.4 — PromptStore
+    │   ├── vector.py         # P0·0.5 — VectorStore
+    │   ├── embedding.py      # P0·0.5 — EmbeddingModel
+    │   ├── connector.py      # P0·0.6 — Connector (idem_key iff side-effecting)
+    │   └── memory.py         # P0·0.6 — MemoryStore
+    │   # grows: retrieval, parsing P1 · repos P2 · guardrails P4 · rerank P8 · subagents P9 ·
+    │   # service Protocols (tool_registry, policy, executor, planner, verifier, conversation) as each service lands
+    │
+    ├── adapters/             # vendor SDKs live here only. Swap = new subfolder + config line.
+    │   ├── llm/              # P0·0.7 — litellm, fake (tests) · vllm P8
+    │   └── prompts/          # P0·0.7 — file_store · postgres_store P4
+    │   # grows: vector, embedding, connector, retrieval P1 · parsing P2 · chunking P3 ·
+    │   # persistence P2 · memory P4 · normalize P4 · rerank P8 · guardrails P9
+    │
+    ├── services/             # the §4 modules. One file each. Import ports + domain only.
+    │   │                     # services reach each other only through port Protocols, wired in the container.
+    │   └── model_gateway.py  # P0 — one provider, direct (plan §5 map) · v1 P5 · tiers P8
+    │   # grows: ingestion P1 · tool_registry, policy, executor P2 · planner, verifier P3 ·
+    │   # memory, conversation, guardrails, prompt_registry P4 · subagents P9
+    │
+    ├── orchestrator/         # LangGraph (§6). Imports ports + domain ONLY — enforced.
+    │   ├── graph.py          # P0·0.9 — walking skeleton: router → responder, in-memory checkpoint
+    │   └── nodes/            # one file per §6.2 node
+    │       ├── router.py     # P0·0.9 — rules · LLM P4
+    │       └── responder.py  # P0·0.9
+    │   # grows: retriever, reasoner P1 · tool_selector, policy_check, executor P2 ·
+    │   # planner, approval_gate, verifier P3 · guardrails_out, memory_writer P4 ·
+    │   # sub_agent_selector P10 (§6.6 seam)
+    │
+    ├── app/                  # composition root (Factory §5.3). ONLY place importing adapters.
+    │   └── container.py      # P0 — build from config, cache per config_version, inject into nodes
+    │   # grows: run_manager P1 (§2.2) · event_bus P1 · use_cases P1 · webhooks P3 · startup P5
+    │
+    ├── api/                  # thin FastAPI transport (§7). No logic.
+    │   ├── main.py           # P0 — app factory, lifespan
+    │   ├── deps.py           # P0 — get_workspace_context (§2.3, X-Workspace-Id)
+    │   ├── routes/           # P0 — messages.py (sync reply), health.py · real 202+job P1·1.7 · SSE P1·1.8
+    │   └── schemas/          # P0 — §7.1 Pydantic models
+    │
+    └── observability/
