@@ -34,7 +34,7 @@ felops-ai/
 │
 └── src/felops/
     ├── domain/               # shared language, pure logic (§4.1 inv.7). No I/O. Anyone may import.
-    │   ├── workspace.py      # P0·0.3 — WorkspaceContext, Namespace (§2.3)
+    │   ├── workspace.py      # P0·0.3 — WorkspaceContext, NameSpace (§2.3)
     │   ├── agent.py          # P0·0.3 — AgentRef, constant customer_support
     │   ├── state.py          # P0·0.3 — AgentState (§6.1)
     │   └── events.py         # P0·0.3 — event envelope (§7.2)

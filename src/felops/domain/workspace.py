@@ -16,7 +16,7 @@ class WorkspaceContext(BaseModel, frozen=True):
     workspace_id: str = Field(min_length=1)
 
 
-class Namespace(BaseModel, frozen=True):
+class NameSpace(BaseModel, frozen=True):
     """Knowledge namespace: workspace + agent + source .
 
     Knowledge is agent-level and shared by all of the agent's sub-agents.

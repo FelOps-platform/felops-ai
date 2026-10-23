@@ -86,7 +86,7 @@ flowchart LR
 | Concern | Mechanism |
 |---|---|
 | `workspace_id` propagation | Set once at ingress by the `get_workspace_context()` dependency (`X-Workspace-Id` header) into a `WorkspaceContext` contextvar. Copied into graph state, the background-task context, MCP calls, log and trace baggage. Resume runs read it from their own request, and startup recovery rebuilds it from the job row. Repositories require it as a non-optional argument. |
-| Knowledge namespaces | `Namespace(workspace_id, agent_id, source_id)`. Knowledge is agent-level and shared by all of the agent's sub-agents. Default: shared collection per embedding model with indexed `workspace_id` payload. The `VectorStore` adapter rejects any query lacking a workspace filter. Enterprise tier: dedicated collection. |
+| Knowledge namespaces | `NameSpace(workspace_id, agent_id, source_id)`. Knowledge is agent-level and shared by all of the agent's sub-agents. Default: shared collection per embedding model with indexed `workspace_id` payload. The `VectorStore` adapter rejects any query lacking a workspace filter. Enterprise tier: dedicated collection. |
 | Model config | `ModelPolicy` per workspace: allowed providers, tier-to-model map, local-only flag for sensitive data, monthly budget cap. The UI's "Model: Automatic (by plan)" is the default tier map. |
 | Prompts | Resolution order: workspace+agent+sub-agent override > workspace+sub-agent > platform sub-agent default > platform default. All pinned by version in `config_version`. |
 | Agent scope | `AgentRef(agent_id, sub_agent_id, audience)` is resolved at ingress and pinned in graph state, checkpoint, events and usage records. V1: `sub_agent_id` is always `customer_support`, audience `external`. |
@@ -209,9 +209,9 @@ class LLMProvider(Protocol):          # openai | anthropic | gemini | local
     def stream(self, req: LLMRequest) -> AsyncIterator[LLMChunk]: ...
 
 class VectorStore(Protocol):          # qdrant | pgvector | weaviate | pinecone
-    async def upsert(self, ns: Namespace, items: list[VectorItem]) -> None: ...
-    async def search(self, ns: Namespace, q: HybridQuery, k: int) -> list[Hit]: ...
-    async def delete(self, ns: Namespace, flt: Filter) -> int: ...
+    async def upsert(self, ns: NameSpace, items: list[VectorItem]) -> None: ...
+    async def search(self, ns: NameSpace, q: HybridQuery, k: int) -> list[Hit]: ...
+    async def delete(self, ns: NameSpace, flt: Filter) -> int: ...
 
 class EmbeddingModel(Protocol):
     model_id: str; dim: int
@@ -474,7 +474,7 @@ Envelope: `{event_id, seq, ts, type, workspace_id, agent_id, sub_agent_id, conve
 | Step | UI | AI repo stores | AI repo validates |
 |---|---|---|---|
 | 1. Name & Instructions | Agent name, Role, Language & constraints, Response format | Compiled agent-level instruction block: four sections mapped to template slots, versioned in Prompt Registry, composed at runtime with the `customer_support` sub-agent persona | Token budget, supported languages (English, Arabic), injection patterns in free text, contradictions with platform-level rules |
-| 2. Knowledge | Website URL, Text snippet, TXT, PDF, DOCX; per-source status | Source records, chunks and vectors under `Namespace(workspace, agent, source)` | Reachability, mime and size limits, content-hash duplicates. Continue allowed while Processing; a Failed source becomes a review warning. |
+| 2. Knowledge | Website URL, Text snippet, TXT, PDF, DOCX; per-source status | Source records, chunks and vectors under `NameSpace(workspace, agent, source)` | Reachability, mime and size limits, content-hash duplicates. Continue allowed while Processing; a Failed source becomes a review warning. |
 | 3. Actions | Six actions with checkbox and Approval toggle | The user's selection `S` (subset of the workspace catalog) and per-action approval flag. Tool Registry derives `E(customer_support) = P(customer_support) ∩ S` and compiles it into the sub-agent's view (§4.1). | Approval composition (the tool author's critical flag OR the user's toggle) is resolved by the backend before this call; the AI repo receives only the resolved `requires_approval` boolean. |
 | 4. Channels | Chat widget, Hosted page, Custom UI (API), WhatsApp | Channel-to-agent binding metadata used for capability flags and by `StaticResolver` | Channel capabilities: streaming on widget, hosted page and API; none on WhatsApp (final message only) |
 | 5. Preview & Review | Counts: sources and chunks, allowed actions, approvals required, channel status | Dry-run result | `config:validate` returns readiness report, with action counts computed from `E`. `/preview` runs the real graph with write tools mocked and read tools live. |

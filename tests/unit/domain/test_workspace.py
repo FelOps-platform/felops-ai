@@ -1,9 +1,9 @@
-"""Unit tests for felops.domain.workspace  WorkspaceContext, Namespace."""
+"""Unit tests for felops.domain.workspace  WorkspaceContext, NameSpace."""
 
 import pytest
 from pydantic import ValidationError
 
-from felops.domain.workspace import Namespace, WorkspaceContext
+from felops.domain.workspace import NameSpace, WorkspaceContext
 
 # WorkspaceContext
 
@@ -43,49 +43,49 @@ class TestWorkspaceContext:
         assert len({a, b}) == 1
 
 
-# Namespace
+# NameSpace
 
 
 class TestNamespace:
     def test_creation(self):
-        ns = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
+        ns = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
         assert ns.workspace_id == "ws-1"
         assert ns.agent_id == "ag-1"
         assert ns.source_id == "src-1"
 
     def test_empty_workspace_id_rejected(self):
         with pytest.raises(ValidationError):
-            Namespace(workspace_id="", agent_id="ag-1", source_id="src-1")
+            NameSpace(workspace_id="", agent_id="ag-1", source_id="src-1")
 
     def test_empty_agent_id_rejected(self):
         with pytest.raises(ValidationError):
-            Namespace(workspace_id="ws-1", agent_id="", source_id="src-1")
+            NameSpace(workspace_id="ws-1", agent_id="", source_id="src-1")
 
     def test_empty_source_id_rejected(self):
         with pytest.raises(ValidationError):
-            Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="")
+            NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="")
 
     def test_frozen_rejects_mutation(self):
-        ns = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
+        ns = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
         with pytest.raises(ValidationError):
             ns.workspace_id = "ws-2"  # type: ignore[misc]
 
     def test_hashable(self):
-        ns = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
+        ns = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
         d = {ns: "ok"}
         assert d[ns] == "ok"
 
     def test_equality(self):
-        a = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
-        b = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
+        a = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
+        b = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
         assert a == b
 
     def test_inequality_on_source(self):
-        a = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
-        b = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-2")
+        a = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
+        b = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-2")
         assert a != b
 
     def test_usable_in_set(self):
-        a = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
-        b = Namespace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
+        a = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
+        b = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
         assert len({a, b}) == 1
