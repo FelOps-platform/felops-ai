@@ -1,0 +1,91 @@
+"""Value objects for the retrieval subsystem.
+
+These types are used in the VectorStore and EmbeddingModel protocol signatures
+(§5.1).  They live in ``domain/`` because they are pure data with no I/O —
+anyone may import them.
+
+Types
+-----
+Vector          Dense (and optional sparse) embedding representation.
+VectorItem      A document chunk prepared for upsert into a vector store.
+HybridQuery     A query carrying both dense and optional sparse vectors.
+Filter          Metadata filter applied during vector search.
+Hit             A single search result returned from the vector store.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class Vector(BaseModel, frozen=True):
+    """A dense embedding vector with an optional sparse counterpart.
+
+    dense   Required.  The float embedding produced by the EmbeddingModel.
+    sparse  Optional.  Non-zero (index, value) pairs for the BM25 / sparse
+            leg of hybrid retrieval (Qdrant sparse vectors, §3).
+            ``None`` when the embedding model does not produce sparse output
+            or when only dense retrieval is used.
+    """
+
+    dense: list[float] = Field(min_length=1)
+    sparse: dict[int, float] | None = None
+
+
+class VectorItem(BaseModel, frozen=True):
+    """A chunk ready to be upserted into the vector store.
+
+    Carries the embedding, the original text, and arbitrary metadata
+    (source_id, headings, language, …).  The ``id`` must be deterministic
+    so that re-ingesting the same content is idempotent.
+    """
+
+    id: str = Field(min_length=1)
+    vector: Vector
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class Filter(BaseModel, frozen=True):
+    """Metadata filter for vector search and delete operations.
+
+    ``must`` conditions are ANDed.  Each condition is a dict like
+    ``{"key": "workspace_id", "match": {"value": "ws-1"}}``.
+    The exact shape follows the Qdrant filter DSL so the adapter can
+    pass it through, but other adapters (pgvector, Weaviate) translate it.
+
+    The VectorStore adapter is required to **reject any query that lacks a
+    workspace_id filter** (§2.3 isolation rule).
+    """
+
+    must: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class HybridQuery(BaseModel, frozen=True):
+    """A query for hybrid (dense + optional sparse) vector search.
+
+    text    The raw query string (kept for logging / debugging).
+    vector  The dense (and optionally sparse) embedding of the query,
+            produced by ``EmbeddingModel.embed_query()``.
+    filter  Metadata filter — **must** include a workspace_id condition.
+    """
+
+    text: str
+    vector: Vector
+    filter: Filter = Field(default_factory=Filter)
+
+
+class Hit(BaseModel, frozen=True):
+    """A single search result returned by ``VectorStore.search()``.
+
+    ``id`` is the vector-item id (same as VectorItem.id).
+    ``score`` is the relevance score (higher = better, scale depends on the
+    store and the fusion method, e.g. RRF).
+    ``payload`` echoes the stored metadata so the Retriever can build ``Chunk``
+    objects without a second lookup.
+    """ 
+
+    id: str
+    score: float
+    payload: dict[str, Any] = Field(default_factory=dict)
