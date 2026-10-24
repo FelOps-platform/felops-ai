@@ -51,12 +51,13 @@ class Filter(BaseModel, frozen=True):
     """Metadata filter for vector search and delete operations.
 
     ``must`` conditions are ANDed.  Each condition is a dict like
-    ``{"key": "workspace_id", "match": {"value": "ws-1"}}``.
+    ``{"key": "language", "match": {"value": "en"}}``.
     The exact shape follows the Qdrant filter DSL so the adapter can
     pass it through, but other adapters (pgvector, Weaviate) translate it.
 
-    The VectorStore adapter is required to **reject any query that lacks a
-    workspace_id filter** (§2.3 isolation rule).
+    Workspace scoping is **not** a filter concern: it is derived solely from
+    ``NameSpace.workspace_id`` (§2.3 isolation rule).  Adapters must not
+    require, and callers must not rely on, a ``workspace_id`` condition here.
     """
 
     must: list[dict[str, Any]] = Field(default_factory=list)
@@ -68,7 +69,8 @@ class HybridQuery(BaseModel, frozen=True):
     text    The raw query string (kept for logging / debugging).
     vector  The dense (and optionally sparse) embedding of the query,
             produced by ``EmbeddingModel.embed_query()``.
-    filter  Metadata filter — **must** include a workspace_id condition.
+    filter  Payload metadata filter.  Workspace scoping comes from the
+            ``NameSpace`` passed alongside the query, never from here.
     """
 
     text: str
@@ -84,7 +86,7 @@ class Hit(BaseModel, frozen=True):
     store and the fusion method, e.g. RRF).
     ``payload`` echoes the stored metadata so the Retriever can build ``Chunk``
     objects without a second lookup.
-    """ 
+    """
 
     id: str
     score: float
