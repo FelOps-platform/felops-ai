@@ -42,7 +42,7 @@
 
 | ID | Task | Module (§) | Own | Days | Dep | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1.1 | Qdrant VectorStore adapter; rejects queries with no workspace filter | §2.3, §5.1 | B | 2 | 0.5 | Filter test passes |
+| 1.1 | Qdrant VectorStore adapter; workspace scoping derived from `NameSpace` | §2.3, §5.1 | B | 2 | 0.5 | Namespace isolation test passes |
 | 1.2 | BGE-M3 EmbeddingModel in thread pool | §3, §4 Embedding | B | 2 | 0.5 | API loop not blocked |
 | 1.3 | Ingestion v0: text/TXT → fixed chunks → embed → upsert | §8.5 | B | 3 | 1.1, 1.2 | Chunks in Qdrant |
 | 1.4 | Retriever v0: dense top-k with citations | §4 Retriever | B | 2 | 1.3 | Recall on 5 Q&A |
@@ -161,7 +161,7 @@ Simple → upgrades → final. Phase in brackets.
 | --- | --- | --- | --- |
 | Model Gateway | One provider, direct (P0) | Retry, fallback, usage (P5) | Tier routing, vLLM (P8) → ModelPolicy, budget (P9) |
 | Embedding | BGE-M3 local (P1) | – | Alt adapter (P10) |
-| Vector store | Qdrant dense, workspace filter (P1) | Sparse vectors (P5) | Dedicated collection (P9), pgvector adapter (P10) |
+| Vector store | Qdrant dense, scoped by `NameSpace.workspace_id` (P1) | Sparse vectors (P5) | Dedicated collection (P9), pgvector adapter (P10) |
 | Retriever | Dense (P1) | Hybrid + RRF (P5) | Rerank, per-agent strategy (P8) |
 | Ingestion | Text/TXT, fixed chunks (P1) | PDF/DOCX/URL (P2) → status, retry, dedupe, heading chunks (P3) → Arabic normalization (P4) | Per-source-type chunking (P8) |
 | Prompt Registry | File templates (P0–P1) | Postgres versions, resolution order (P4) | Eval gating, rollback (P8) |
