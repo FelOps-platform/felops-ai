@@ -212,6 +212,13 @@ class TestVectorStoreContract:
         assert deleted == 0
 
     @pytest.mark.asyncio
+    async def test_delete_is_idempotent(self, store: FakeVectorStore) -> None:
+        await store.upsert(_NS, [_make_item()])
+
+        assert await store.delete(_NS, Filter()) == 1
+        assert await store.delete(_NS, Filter()) == 0
+
+    @pytest.mark.asyncio
     async def test_delete_only_removes_matching_items(self, store: FakeVectorStore) -> None:
         await store.upsert(_NS, [_make_item("a", version=1), _make_item("b", version=2)])
 

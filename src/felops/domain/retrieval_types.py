@@ -37,9 +37,10 @@ class Vector(BaseModel, frozen=True):
 class VectorItem(BaseModel, frozen=True):
     """A chunk ready to be upserted into the vector store.
 
-    Carries the embedding, the original text, and arbitrary metadata
-    (source_id, headings, language, …).  The ``id`` must be deterministic
-    so that re-ingesting the same content is idempotent.
+    Carries the embedding and arbitrary metadata (source_id, headings,
+    language, …).  The original text lives inside *payload* as ``payload["text"]``.
+    ``payload`` is untyped, so that key is not validated here.  
+    The ``id`` must be deterministic so that re-ingesting the same content is idempotent.
     """
 
     id: str = Field(min_length=1)
@@ -54,6 +55,12 @@ class Filter(BaseModel, frozen=True):
     ``{"key": "language", "match": {"value": "en"}}``.
     The exact shape follows the Qdrant filter DSL so the adapter can
     pass it through, but other adapters (pgvector, Weaviate) translate it.
+
+    ``must``-only is a deliberate P1 decision: ``should`` (OR) and
+    ``must_not`` (NOT) are deferred until a feature needs them.  The dict
+    shape is also deliberate while P1 is Qdrant-first; new adapters translate
+    it into their own DSL.  Condition keys are schema-free payload field
+    names, so only the shape is fixed — key names cannot be validated here.
 
     Workspace scoping is **not** a filter concern: it is derived solely from
     ``NameSpace.workspace_id`` (§2.3 isolation rule).  Adapters must not

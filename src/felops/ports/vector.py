@@ -27,7 +27,12 @@ class VectorStore(Protocol):
     `search`
         Hybrid search scoped to ``ns``, with payload filtering.
     `delete`
-        Remove items matching *flt* under ``ns``; return count.
+        Remove items matching *flt* under ``ns``; return how many were
+        removed.  The count is scoped by both ``ns`` and ``flt`` and is
+        ``0`` when nothing matches, so repeated deletes are idempotent.
+        It is best-effort under concurrent writes; stores that cannot count
+        synchronously may run a follow-up query, and callers must not use the
+        value for exact accounting.
     """
 
     async def upsert(self, ns: NameSpace, items: list[VectorItem]) -> None: ...
