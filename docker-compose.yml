@@ -34,12 +34,22 @@ services:
       interval: 5s
       retries: 10
 
+  mock-backend:
+    build: ./mocks/mock_backend
+    ports:
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9001/health')"]
+      interval: 5s
+      retries: 10
+
   api:
     build: .
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       QDRANT_URL: http://qdrant:6333
       MOCK_MCP_URL: http://mock-mcp:9000
+      MOCK_BACKEND_URL: http://mock-backend:9001
     ports:
       - "8000:8000"
     depends_on:
@@ -48,6 +58,8 @@ services:
       qdrant:
         condition: service_healthy
       mock-mcp:
+        condition: service_healthy
+      mock-backend:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
