@@ -3,11 +3,12 @@ test stub'). Real adapters (0.7 LiteLLM + file store) add their own subclasses."
 
 from __future__ import annotations
 
-from felops.ports.llm import ProviderCaps
-from tests.unit.ports.llm_contract import LLMProviderContract
-from tests.unit.ports.prompts_contract import PromptSeed, PromptStoreContract
 from tests.fakes.llm import StubLLMProvider
 from tests.fakes.prompt import StubPromptStore
+from tests.unit.ports.llm_contract import LLMProviderContract
+from tests.unit.ports.prompts_contract import PromptSeed, PromptStoreContract
+
+from felops.ports.llm import ProviderCaps
 
 
 class TestStubLLMProvider(LLMProviderContract):
