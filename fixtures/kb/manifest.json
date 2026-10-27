@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "updated": "2026-10-26",
+  "default_locale": "en",
+  "locales": ["en", "ar"],
+  "description": "Bilingual seed knowledge base for the §8.2 Sara Ali demo and the P1-P5 retrieval evals. Fictional brand: Dar Nour.",
+  "documents": [
+    {
+      "doc_id": "shipping-delivery",
+      "title_en": "Shipping & Delivery Policy",
+      "title_ar": "سياسة الشحن والتوصيل",
+      "en_path": "kb/en/shipping-delivery.txt",
+      "ar_path": "kb/ar/shipping-delivery.ar.txt"
+    },
+    {
+      "doc_id": "returns-refunds",
+      "title_en": "Returns & Refunds Policy",
+      "title_ar": "سياسة الإرجاع والاسترداد",
+      "en_path": "kb/en/returns-refunds.txt",
+      "ar_path": "kb/ar/returns-refunds.ar.txt"
+    },
+    {
+      "doc_id": "payments-invoices",
+      "title_en": "Payments & Invoices",
+      "title_ar": "الدفع والفواتير",
+      "en_path": "kb/en/payments-invoices.txt",
+      "ar_path": "kb/ar/payments-invoices.ar.txt"
+    },
+    {
+      "doc_id": "warranty-repairs",
+      "title_en": "Warranty & Repairs",
+      "title_ar": "الضمان والإصلاح",
+      "en_path": "kb/en/warranty-repairs.txt",
+      "ar_path": "kb/ar/warranty-repairs.ar.txt"
+    },
+    {
+      "doc_id": "orders-support",
+      "title_en": "Orders & Customer Support",
+      "title_ar": "الطلبات ودعم العملاء",
+      "en_path": "kb/en/orders-support.txt",
+      "ar_path": "kb/ar/orders-support.ar.txt"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "action_id": "refund_order",
+  "version": 1,
+  "name": "Refund order",
+  "integration": "shopify",
+  "integration_name": "Shopify",
+  "mcp_tool": "shopify_refund_order",
+  "description": "Refund all or part of an order to the original payment method.",
+  "side_effect_class": "side_effecting",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "order_number": {
+        "type": "string",
+        "pattern": "^#?[0-9]{3,6}$",
+        "description": "Order number, with or without the leading #."
+      },
+      "amount": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "description": "Refund amount in AED."
+      },
+      "reason": {
+        "type": "string",
+        "enum": ["damaged_on_arrival", "defective", "wrong_item", "changed_mind", "other"]
+      },
+      "note": {
+        "type": "string",
+        "maxLength": 500,
+        "description": "Optional note recorded on the refund."
+      }
+    },
+    "required": ["order_number", "amount", "reason"],
+    "additionalProperties": false
+  },
+  "result": {
+    "type": "object",
+    "properties": {
+      "refund_id": { "type": "string", "pattern": "^RFD-[0-9]{4}$" },
+      "order_number": { "type": "string" },
+      "amount": { "type": "number" },
+      "status": { "type": "string", "enum": ["completed", "pending", "failed"] },
+      "currency": { "const": "AED" }
+    },
+    "required": ["refund_id", "order_number", "amount", "status", "currency"]
+  },
+  "verifier": {
+    "kind": "read_back",
+    "action_id": "lookup_order",
+    "arguments": { "order_number": "$args.order_number" },
+    "assert": [
+      { "field": "refund_status", "equals": "completed" },
+      { "field": "refund_amount", "equals": "$args.amount" }
+    ]
+  },
+  "example": {
+    "arguments": { "order_number": "#1042", "amount": 120.0, "reason": "damaged_on_arrival" },
+    "result": {
+      "refund_id": "RFD-3081",
+      "order_number": "#1042",
+      "amount": 120.0,
+      "status": "completed",
+      "currency": "AED"
+    }
+  }
+}

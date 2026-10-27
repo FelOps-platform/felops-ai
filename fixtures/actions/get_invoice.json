@@ -1,0 +1,54 @@
+{
+  "action_id": "get_invoice",
+  "version": 1,
+  "name": "Get invoice",
+  "integration": "quickbooks",
+  "integration_name": "QuickBooks",
+  "mcp_tool": "quickbooks_get_invoice",
+  "description": "Read an invoice with its status, recipient and amount.",
+  "side_effect_class": "read_only",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "invoice_number": {
+        "type": "string",
+        "pattern": "^INV-[0-9]{4}$",
+        "description": "Invoice number in the INV-nnnn format."
+      }
+    },
+    "required": ["invoice_number"],
+    "additionalProperties": false
+  },
+  "result": {
+    "type": "object",
+    "properties": {
+      "invoice_number": { "type": "string" },
+      "status": { "type": "string", "enum": ["draft", "sent", "paid", "void"] },
+      "recipient_email": { "type": "string", "format": "email" },
+      "amount": { "type": "number" },
+      "currency": { "const": "AED" },
+      "issued_at": { "type": "string", "format": "date-time" }
+    },
+    "required": ["invoice_number", "status", "recipient_email", "amount", "currency"]
+  },
+  "verifier": {
+    "kind": "self_read",
+    "action_id": "get_invoice",
+    "arguments": { "invoice_number": "$args.invoice_number" },
+    "assert": [
+      { "field": "status", "equals": "$result.status" },
+      { "field": "recipient_email", "equals": "$result.recipient_email" }
+    ]
+  },
+  "example": {
+    "arguments": { "invoice_number": "INV-2210" },
+    "result": {
+      "invoice_number": "INV-2210",
+      "status": "sent",
+      "recipient_email": "sara.ali@example.com",
+      "amount": 349.0,
+      "currency": "AED",
+      "issued_at": "2026-10-26T10:15:00+04:00"
+    }
+  }
+}
