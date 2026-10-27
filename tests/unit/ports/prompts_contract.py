@@ -87,3 +87,8 @@ class PromptStoreContract:
 
     def test_accepts_config_version_pin(self, store):
         assert isinstance(store.resolve("persona", ctx(config_version="v1")), PromptVersion)
+
+    def test_node_is_context_not_a_resolution_key(self, store):
+        assert store.resolve("persona", ctx()) == store.resolve(
+            "persona", ctx(node="triage")
+        )

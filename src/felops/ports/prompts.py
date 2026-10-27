@@ -21,8 +21,11 @@ class PromptScope(IntEnum):
  
 @dataclass(frozen=True, slots=True)
 class PromptContext:
-    """Keys a prompt is resolved by. `sub_agent_id` is the per-sub-agent seam
-    (§4.2): V1 always passes `customer_support`."""
+    """Context supplied when resolving a prompt.
+
+    `sub_agent_id` is the per-sub-agent seam (§4.2): V1 always passes
+    `customer_support`. `node` is trace context, not a resolution key.
+    """
  
     workspace_id: str
     agent_id: str
@@ -30,6 +33,7 @@ class PromptContext:
     # Pin to a config snapshot (§2.3). File-backed stores may ignore it; the
     # Postgres store (P4) resolves the versions that snapshot recorded.
     config_version: str | None = None
+    node: str | None = None
  
  
 @dataclass(frozen=True, slots=True)
