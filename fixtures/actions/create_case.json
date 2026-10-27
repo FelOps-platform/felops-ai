@@ -1,0 +1,62 @@
+{
+  "action_id": "create_case",
+  "version": 1,
+  "name": "Create case",
+  "integration": "salesforce",
+  "integration_name": "Salesforce",
+  "mcp_tool": "salesforce_create_case",
+  "description": "Open a support case for a customer issue that needs follow-up.",
+  "side_effect_class": "side_effecting",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "subject": { "type": "string", "minLength": 3, "maxLength": 120 },
+      "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+      "contact_email": { "type": "string", "format": "email" },
+      "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"] },
+      "order_number": {
+        "type": "string",
+        "pattern": "^#?[0-9]{3,6}$",
+        "description": "Optional related order."
+      }
+    },
+    "required": ["subject", "description", "contact_email", "priority"],
+    "additionalProperties": false
+  },
+  "result": {
+    "type": "object",
+    "properties": {
+      "case_id": { "type": "string", "pattern": "^CASE-[0-9]{4}$" },
+      "status": { "type": "string", "enum": ["open", "pending", "closed"] },
+      "subject": { "type": "string" },
+      "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"] },
+      "created_at": { "type": "string", "format": "date-time" }
+    },
+    "required": ["case_id", "status", "subject", "priority", "created_at"]
+  },
+  "verifier": {
+    "kind": "read_back",
+    "action_id": "get_case",
+    "arguments": { "case_id": "$result.case_id" },
+    "assert": [
+      { "field": "status", "equals": "open" },
+      { "field": "subject", "equals": "$args.subject" }
+    ]
+  },
+  "example": {
+    "arguments": {
+      "subject": "Damaged lamp on order #1042",
+      "description": "The ceramic base arrived cracked. The customer asks for a replacement or a refund.",
+      "contact_email": "sara.ali@example.com",
+      "priority": "high",
+      "order_number": "#1042"
+    },
+    "result": {
+      "case_id": "CASE-5512",
+      "status": "open",
+      "subject": "Damaged lamp on order #1042",
+      "priority": "high",
+      "created_at": "2026-10-26T11:40:00+04:00"
+    }
+  }
+}
