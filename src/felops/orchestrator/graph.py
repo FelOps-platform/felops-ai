@@ -62,18 +62,18 @@ def build_graph(
 
     builder = StateGraph(AgentState)
 
-    # ── Nodes ────────────────────────────────────────────────────────────────
+    # Nodes
     builder.add_node("router", router)
     builder.add_node("responder", responder)
 
-    # ── Edges ────────────────────────────────────────────────────────────────
+    # Edges
     # P0: unconditional path through the two nodes.
     # P1: replace with conditional edges on router output (intent classification).
     builder.add_edge(START, "router")
     builder.add_edge("router", "responder")
     builder.add_edge("responder", END)
 
-    # ── Compile ──────────────────────────────────────────────────────────────
+    # Compile
     return builder.compile(checkpointer=checkpointer)
 
 
