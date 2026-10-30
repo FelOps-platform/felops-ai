@@ -1,0 +1,14 @@
+[
+  {
+    "connection_id": "shopify",
+    "kind": "mcp",
+    "label": "Shopify",
+    "tool_ids": ["shopify.lookup_order"]
+  },
+  {
+    "connection_id": "quickbooks",
+    "kind": "mcp",
+    "label": "QuickBooks",
+    "tool_ids": ["quickbooks.send_invoice"]
+  }
+]
