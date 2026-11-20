@@ -40,6 +40,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       QDRANT_URL: http://qdrant:6333
       MOCK_MCP_URL: http://mock-mcp:9000
+      BACKEND_URL: http://mock-backend:8080
+      BACKEND_IDENTITY_TOKEN: ${BACKEND_IDENTITY_TOKEN:-dev_backend_token}
+      AI_IDENTITY_TOKEN: ${AI_IDENTITY_TOKEN:-dev_ai_token}
     ports:
       - "8000:8000"
     depends_on:
