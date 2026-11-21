@@ -355,7 +355,9 @@ The system catalog is global and owned by the Backend. The AI Service keeps a re
 
 - **Push:** `PUT /catalog` with `{ "tools": [...] }`, the full catalog. The Backend pushes once per change, before the UI shows it. Delivery is at least once. The AI Service applies the push directly to its local catalog copy and returns `{ "applied": true }`.
 - **Pull:** `GET /catalog` on the Backend (`?full=true` returns the tools). The AI Service calls it at startup to initialize its local catalog copy.
-- **Fields per tool:** `tool_id`, `connector_id`, `description`, input schema, `result_summary` and `effect_summary` templates, `version`, `deprecated`.
+- **Fields per tool:** `tool_id`, `connector_id`, `description`, `parameters` (the input JSON Schema), `result_summary` and `effect_summary` templates, `version`, `deprecated`.
+- **Read-only vs. side-effecting:** `effect_summary` is `null` for a read-only tool and a deterministic template for a side-effecting tool. Preview mocks tools with a non-null `effect_summary` and runs `null` tools live. This is a preview/display rule only; every call still carries an `idem_key` (§4).
+- **Templates:** `result_summary` renders from the `data` object of the execution result and `effect_summary` from the call arguments. Both are deterministic `{field}` templates, never free LLM text.
 - The catalog has no approval flag. Approval is per agent and tool, in `agent_config`.
 - `tool_id` is stable and never reused. The Backend deprecates a tool instead of deleting it. When it removes or deprecates a tool, it pushes the catalog first and then leaves the tool out of every `agent_config`.
 - A disconnected connector is handled the same way: leave its tools out of `agent_config`.
@@ -367,7 +369,7 @@ All carry `Authorization: Bearer <BACKEND_IDENTITY_TOKEN>` and are scoped under 
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | POST | `/workspaces/{workspace_id}/agents/{agent_id}/config:validate` | Body `{agent_config}`. Returns `{valid, errors[], warnings[], effective_tools}`. Error `unknown_tool`. Warnings `tool_unreachable`, `tool_removed`. |
-| POST | `/workspaces/{workspace_id}/agents/{agent_id}/preview` | Body `{message, agent_config}`. SSE stream. Write tools are mocked; read tools run live. |
+| POST | `/workspaces/{workspace_id}/agents/{agent_id}/preview` | Body `{message, agent_config}`. SSE stream. Tools with a non-null `effect_summary` are mocked; `effect_summary: null` tools run live. |
 | POST | `/workspaces/{workspace_id}/conversations/{conversation_id}/mode` | Body `{mode: human_control \| active \| closed, actor}`. Returns `200`. |
 | GET | `/workspaces/{workspace_id}/conversations/{conversation_id}/events` | SSE stream. Header `Last-Event-ID` replays missed events. |
 | GET | `/workspaces/{workspace_id}/conversations/{conversation_id}/trace` | Ordered trace events. |

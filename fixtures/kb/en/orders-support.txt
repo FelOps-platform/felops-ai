@@ -1,0 +1,34 @@
+# Orders & Customer Support
+
+## Changing or cancelling an order
+
+- An order can be cancelled free of charge within 1 hour of being placed, if it has not been dispatched.
+- After dispatch, a cancellation is handled as a return, as described in Returns & Refunds. The delivery fee is not refunded.
+- The delivery address can be changed before dispatch only. After dispatch the carrier may redirect the parcel for AED 20, if the new address is in a served area.
+- To change an item or a quantity, cancel the order and place a new one.
+
+## Order status
+
+- A confirmation email is sent when the order is placed, and a dispatch email with the tracking number when the parcel leaves the warehouse.
+- Order numbers look like #1042. Tracking numbers use the format TRK followed by four digits.
+- Support can confirm the status from the order number.
+
+## Promo codes and gift cards
+
+- One promo code per order. Codes cannot be combined.
+- Codes have no cash value and cannot be applied after the order is placed. The order must be cancelled and placed again within 1 hour.
+- Gift cards are valid for 12 months from purchase and cannot be exchanged for cash.
+
+## Contacting support
+
+- WhatsApp: +971 4 000 0000 (text messages only).
+- Email: support@darnour.example.
+- Hours: Monday to Friday 09:00 to 18:00, Saturday 10:00 to 14:00, Gulf Standard Time. Closed on Sunday and public holidays.
+- The average first reply arrives within 4 business hours.
+- Have the order number ready. Never share full card numbers.
+
+## Escalation
+
+- If an issue is unresolved after 5 business days, ask for a supervisor.
+- Complaints are acknowledged within 1 business day and resolved within 10 business days.
+- Complaints can also be sent to complaints@darnour.example.
