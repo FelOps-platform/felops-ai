@@ -1,0 +1,36 @@
+# Payments & Invoices
+
+## Accepted payment methods
+
+- Visa, Mastercard and American Express.
+- Apple Pay and Google Pay.
+- Cash on delivery: AED 15 fee, available for orders up to AED 1,500.
+- Bank transfer: available for orders above AED 5,000. The order is dispatched after the funds clear, usually within 1 to 2 business days.
+
+## Currency and taxes
+
+- All prices are in United Arab Emirates dirhams (AED) and include 5% VAT.
+- Orders in GCC countries are charged in AED, and the customer's bank may add a currency conversion fee.
+
+## When an invoice is issued
+
+- A tax invoice in PDF format is issued automatically when the order is dispatched. It is not issued when the order is placed.
+- Invoice numbers use the format INV followed by four digits, for example INV-2210.
+- The invoice is emailed to the address on the order and can also be requested from support.
+- If an invoice is needed before dispatch, support can issue a proforma invoice. The tax invoice is still issued only after dispatch.
+
+## Requesting a copy or correcting an invoice
+
+- A copy or a correction (company name, tax registration number or address) can be requested within 30 days.
+- Corrections take up to 2 business days. When an amount changes, a credit note and a new invoice are issued.
+- The invoice date cannot be changed.
+
+## Payment security and failed payments
+
+- Card details are processed by our payment provider. Dar Nour does not store full card numbers.
+- If a payment fails, the order stays unpaid for 24 hours and is then cancelled automatically.
+- We never ask for card details over WhatsApp or email.
+
+## Refund method
+
+- Refunds are issued to the original payment method only, as described in Returns & Refunds.
