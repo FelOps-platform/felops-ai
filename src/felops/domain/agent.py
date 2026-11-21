@@ -28,7 +28,7 @@ class AgentRef(BaseModel, frozen=True):
     """Resolved agent + sub-agent identity.
 
     Frozen and hashable so it can be used as a dict key (e.g. in the
-    Tool Registry effective-set cache keyed by AgentRef + config_version).
+    Tool Registry effective-set cache keyed by AgentRef).
 
     V1: sub_agent_id is always 'customer_support', audience 'external'.
     The type is future-proof for multi-sub-agent without a schema change.
@@ -42,11 +42,13 @@ class AgentRef(BaseModel, frozen=True):
 class HandoffReason(StrEnum):
     """Reasons the agent hands off to a human.
 
-    LOW_CONFIDENCE       confidence < τ or retrieval miss on a policy-sensitive topic.
-    VERIFY_FAILED        verifier detected a mismatch; no re-verify, no re-execute.
-    ASSISTANCE_REQUESTED  explicit agent request for human assistance.
+    LOW_CONFIDENCE          confidence < τ or retrieval miss on a policy-sensitive topic.
+    TOOL_FAILED             tool execution failure or exhausted retries on Backend.
+    CONNECTOR_NOT_CONNECTED connector is not connected or authorization is invalid.
+    ASSISTANCE_REQUESTED    explicit agent request for human assistance.
     """
 
     LOW_CONFIDENCE = "low_confidence"
-    VERIFY_FAILED = "verify_failed"
+    TOOL_FAILED = "tool_failed"
+    CONNECTOR_NOT_CONNECTED = "connector_not_connected"
     ASSISTANCE_REQUESTED = "assistance_requested"
