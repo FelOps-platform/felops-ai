@@ -1,6 +1,9 @@
 """Router node — P0 stub (§6.2, §6.3).
 
-Routes every turn to the responder in P0.
+Routes every turn to the responder in P0. In the full graph (§6.3),
+router conditional edges select retriever, planner, or responder after
+guardrails_in; subsequent conditional edges select the reasoner and
+downstream execution path. The new architecture has no verifier node.
 In P1 (task 1.5) the intent detection is wired here.
 In P4 (task 4.7) the small-LLM intent router replaces this stub.
 

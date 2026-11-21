@@ -13,7 +13,7 @@ Use make_thread_config() everywhere — do not construct thread_id ad-hoc.
 Future nodes (see §6.3 for the full graph):
   P1: guardrails_in, retriever, reasoner, guardrails_out, memory_writer
   P2: tool_selector, policy_check, executor
-  P3: planner, approval_gate, verifier
+  P3: planner, approval_gate
   P10 seam: sub_agent_selector on the guardrails_in → router edge (§6.6)
 """
 
@@ -47,12 +47,35 @@ def build_graph(
     P0 graph topology:
         START → router → responder → END
 
-    Full P3+ topology (§6.3):
-        START → guardrails_in → router → [retriever|planner|responder]
-             → reasoner → [tool_selector|responder]
-             → policy_check → [executor|approval_gate|responder]
-             → executor → verifier → [planner|responder]
-             → responder → guardrails_out → memory_writer → END
+    Full topology (§6.3 / §6.4 of new architecture):
+
+        START → guardrails_in
+                  →(pass)    router
+                               →(intent=question)              retriever → reasoner
+                               →(intent=task)                  planner
+                               →(greeting/needs clarification) responder
+                               →(human_control)                END
+                  →(blocked) responder
+
+        planner → retriever (step needs knowledge)
+                → tool_selector (step is tool call)
+        retriever → reasoner (always)
+        reasoner  → tool_selector (needs tool)
+                  → responder    (answer ready; handoff=low_confidence if confidence < τ)
+        tool_selector → policy_check (always)
+        policy_check  → executor     (allow)
+                      → approval_gate → executor / responder (approved / rejected|expired)
+                      → responder    (deny)
+        executor → planner   (succeeded, steps remain)
+                 → responder (succeeded, plan done)
+                 → responder (failed, handoff=tool_failed)
+        responder → guardrails_out → memory_writer → END
+
+    Note: the verifier node is eliminated in the new architecture (§6.3).
+    The backend owns tool verification and returns a final succeeded/failed
+    execution status (§4.2 of ai-service-contract.md). executor routes
+    directly to planner (steps remain), responder (plan done), or responder
+    with handoff=tool_failed (execution failed).
 
     §6.6 seam (P10): insert sub_agent_selector on the
         guardrails_in → router edge. No other code changes.
