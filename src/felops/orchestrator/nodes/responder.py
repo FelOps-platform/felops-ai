@@ -24,7 +24,7 @@ from felops.domain.events import EventType
 from felops.domain.state import AgentState, TraceEvent
 
 # P0 canned reply — replaced by a real LLM call in P1.
-_CANNED_REPLY = "I received your message. (stub reply — LLM not wired yet)"
+CANNED_REPLY = "I received your message. (stub reply — LLM not wired yet)"
 
 
 def responder(state: AgentState) -> dict[str, Any]:
@@ -41,12 +41,12 @@ def responder(state: AgentState) -> dict[str, Any]:
       execution_trace  (operator.add reducer appends the TraceEvent)
     """
     message_id = str(uuid.uuid4())
-    reply = AIMessage(content=_CANNED_REPLY, id=message_id)
+    reply = AIMessage(content=CANNED_REPLY, id=message_id)
     trace = TraceEvent(
         event_type=EventType.MESSAGE_FINAL.value,
         data={
             "message_id": message_id,
-            "text": _CANNED_REPLY,
+            "text": CANNED_REPLY,
             "citations": [],
         },
     )

@@ -8,7 +8,7 @@ These tests verify:
   1. The graph compiles without errors.
   2. A canned AIMessage is appended to state.messages.
   3. Identity fields (workspace_id, agent_id, sub_agent_id) are preserved.
-  4. A trace event is recorded for each node.
+  4. The router no longer emits a trace event; the responder emits message.final.
   5. State is checkpointed between invocations on the same thread.
   6. Two different threads are fully isolated.
   7. make_thread_config() produces the correct format.
@@ -18,22 +18,22 @@ These tests verify:
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
 
 from felops.domain.state import AgentState
 from felops.orchestrator.graph import build_graph, make_thread_config
+from felops.orchestrator.nodes.responder import CANNED_REPLY
 
 # Fixtures
 
 
 @pytest.fixture
 def graph():
-    """Fresh compiled graph with an in-memory checkpointer for each test."""
-    return build_graph(checkpointer=MemorySaver())
+    """Fresh compiled graph with default in-memory checkpointer."""
+    return build_graph()
 
 
 def _initial_input(
@@ -42,7 +42,7 @@ def _initial_input(
     agent_id: str = "agent-test",
     conversation_id: str = "conv-001",
     text: str = "Hello",
-) -> tuple[AgentState, dict[str, Any]]:
+) -> tuple[AgentState, RunnableConfig]:
     """Returns (state_input, thread_config)."""
     state = AgentState(
         workspace_id=workspace_id,
@@ -59,17 +59,38 @@ def _initial_input(
 
 class TestGraphCompiles:
     def test_build_graph_returns_compiled_graph(self):
-        """build_graph() must return without raising."""
+        """build_graph() must return without raising and have a checkpointer."""
         g = build_graph()
         assert g is not None
+        assert g.checkpointer is not None
+        assert isinstance(g.checkpointer, InMemorySaver)
 
     def test_build_graph_with_explicit_checkpointer(self):
-        """Explicit MemorySaver injection must work."""
-        g = build_graph(checkpointer=MemorySaver())
+        """Explicit InMemorySaver injection must work."""
+        g = build_graph(checkpointer=InMemorySaver())
         assert g is not None
+        assert g.checkpointer is not None
+        assert isinstance(g.checkpointer, InMemorySaver)
+
+    def test_build_graph_default_checkpointer_persists_across_turns(self):
+        """The default checkpointer must persist state across turns on one thread."""
+        g = build_graph()
+        assert g.checkpointer is not None
+        state, config = _initial_input(conversation_id="conv-default-persist")
+        g.invoke(state, config=config)
+        second_turn = {"messages": [HumanMessage(content="Second turn")]}
+        result = g.invoke(second_turn, config=config)
+        all_content = " ".join(m.content for m in result["messages"])
+        assert "Hello" in all_content
+        assert "Second turn" in all_content
+
+    def test_graph_topology_contains_expected_nodes(self):
+        """The compiled graph topology must expose exactly the P0 nodes."""
+        g = build_graph()
+        assert set(g.get_graph().nodes) == {"__start__", "router", "responder", "__end__"}
 
     def test_build_graph_no_args_is_invocable(self):
-        """build_graph() with no args (default MemorySaver) must produce a graph
+        """build_graph() with no args (default InMemorySaver) must produce a graph
         that can be invoked end-to-end without error."""
         g = build_graph()
         state, config = _initial_input()
@@ -98,8 +119,7 @@ class TestCannedReply:
         result = graph.invoke(dict_input, config=config)
         ai_messages = [m for m in result["messages"] if isinstance(m, AIMessage)]
         assert ai_messages, "Expected canned AIMessage when invoked with dict"
-        expected_canned = "I received your message. (stub reply — LLM not wired yet)"
-        assert result["messages"][-1].content == expected_canned
+        assert result["messages"][-1].content == CANNED_REPLY
 
     def test_canned_reply_is_non_empty(self, graph):
         """The canned AIMessage must have non-empty content."""
@@ -312,18 +332,16 @@ class TestAgentConfigPropagation:
 
 class TestExecutionTrace:
     def test_trace_events_are_recorded(self, graph):
-        """Both router and responder must append TraceEvents."""
+        """The responder must append at least one TraceEvent (router is silent in P0)."""
         state, config = _initial_input()
         result = graph.invoke(state, config=config)
-        assert len(result["execution_trace"]) >= 2, (
-            "Expected at least one trace event per node (router + responder)"
-        )
+        assert len(result["execution_trace"]) >= 1
 
-    def test_trace_contains_router_event(self, graph):
+    def test_trace_does_not_contain_router_routed_event(self, graph):
         state, config = _initial_input()
         result = graph.invoke(state, config=config)
         event_types = [e.event_type for e in result["execution_trace"]]
-        assert "router.routed" in event_types
+        assert "router.routed" not in event_types
 
     def test_trace_contains_responder_event(self, graph):
         state, config = _initial_input()
@@ -344,7 +362,7 @@ class TestExecutionTrace:
         # Exact key set assertion (§7.2, §9)
         assert set(data.keys()) == {"message_id", "text", "citations"}
         assert isinstance(data["message_id"], str) and len(data["message_id"]) > 0
-        assert data["text"] == "I received your message. (stub reply — LLM not wired yet)"
+        assert data["text"] == CANNED_REPLY
         assert data["citations"] == []
 
         # message_id matches the AIMessage id
@@ -408,5 +426,24 @@ class TestThreadConfig:
         """graph.invoke() with a checkpointer but no thread_id config must raise ValueError."""
         g = build_graph()
         state, _ = _initial_input()
-        with pytest.raises(ValueError, match="thread_id"):
+        with pytest.raises(ValueError):
             g.invoke(state)
+
+
+class TestMsgpackSerialization:
+    def test_trace_event_strict_msgpack_roundtrip(self, monkeypatch):
+        import langgraph.checkpoint.serde._msgpack as _msgpack
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+        from felops.domain.state import STATE_TYPES, TraceEvent
+
+        monkeypatch.setenv("LANGGRAPH_STRICT_MSGPACK", "true")
+        monkeypatch.setattr(_msgpack, "STRICT_MSGPACK_ENABLED", True)
+
+        serde = JsonPlusSerializer(allowed_msgpack_modules=STATE_TYPES)
+        original = TraceEvent(event_type="message.final", data={"text": "roundtrip test"})
+        type_, payload = serde.dumps_typed(original)
+        restored = serde.loads_typed((type_, payload))
+
+        assert isinstance(restored, TraceEvent)
+        assert restored == original

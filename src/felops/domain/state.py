@@ -53,7 +53,7 @@ class Plan(BaseModel):
 
 
 class Chunk(BaseModel, frozen=True):
-    """A retrieved knowledge chunk with citation """
+    """A retrieved knowledge chunk with citation"""
 
     chunk_id: str
     source_id: str
@@ -167,7 +167,7 @@ class AgentState(BaseModel):
       execution_trace  operator.add: plain append (immutable TraceEvent items)
     """
 
-    # Identity  pinned at ingress by the submit-message use case 
+    # Identity  pinned at ingress by the submit-message use case
     workspace_id: str
     agent_id: str
     sub_agent_id: str = DEFAULT_SUB_AGENT_ID
@@ -190,8 +190,32 @@ class AgentState(BaseModel):
     pending_approvals: list[Approval] = Field(default_factory=list)
 
     # Execution trace  operator.add appends TraceEvent items
+    # Note (DEFER to P4): execution_trace grows unboundedly across conversation turns.
+    # Bounding/compaction strategy (windowing, summarization, or offloading to storage)
+    # is deferred to P4 (observability & trace compaction).
     execution_trace: Annotated[list[TraceEvent], operator.add] = Field(default_factory=list)
 
     # Confidence & handoff
     confidence: float = 0.0
     handoff: HandoffReason | None = None
+
+
+# Msgpack serialization allowlist shared by the P0 in-memory checkpointer and the
+# P3 Postgres checkpointer (via JsonPlusSerializer). Must contain classes or
+# (module, name) tuples — NEVER dotted strings.
+STATE_TYPES: tuple[type, ...] = (
+    # Pydantic value objects flowing through state channels
+    PlanStep,
+    Plan,
+    Chunk,
+    AgentInstructions,
+    AgentToolConfig,
+    AgentConfig,
+    ToolCall,
+    Approval,
+    TraceEvent,
+    # StrEnums appearing in state channels
+    SideEffectClass,
+    ApprovalStatus,
+    HandoffReason,
+)

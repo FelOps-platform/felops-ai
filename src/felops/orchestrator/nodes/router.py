@@ -14,20 +14,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from felops.domain.state import AgentState, TraceEvent
+from felops.domain.state import AgentState
 
 
 def router(state: AgentState) -> dict[str, Any]:
     """P0 stub: always route to responder.
 
-    Returns a partial state dict. Only writes to execution_trace
-    (appended by operator.add reducer). Messages are left to the responder.
+    P0 writes nothing to state; trace is responder-only. The old route
+    breadcrumb was emitted as a router route event, which has been dropped
+    entirely.
 
     Future: read state.messages[-1] to classify intent (question /
     task / greeting) and set a route flag that the conditional edge reads.
+
+    TODO(task-1.5): add a typed ``route`` field to AgentState and conditional
+    edges; the old route breadcrumb lived in the dropped router route event.
     """
-    trace = TraceEvent(
-        event_type="router.routed",
-        data={"intent": "stub", "route": "responder"},
-    )
-    return {"execution_trace": [trace]}
+    return {}

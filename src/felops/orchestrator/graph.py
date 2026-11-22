@@ -4,8 +4,9 @@ Implements the minimal graph:
     START → router → responder → END
 
 This is the structural foundation every future node plugs into.
-The checkpointer is injected so tests use MemorySaver and production
-uses the Postgres checkpointer (task 3.1).
+The checkpointer is injected so tests use InMemorySaver and production
+uses the Postgres checkpointer (task 3.1). Build the graph once per process
+and reuse it; in production its ownership is app/container.py.
 
 thread_id convention (§2.3): "{workspace_id}:{conversation_id}"
 Use make_thread_config() everywhere — do not construct thread_id ad-hoc.
@@ -19,14 +20,14 @@ Future nodes (see §6.3 for the full graph):
 
 from __future__ import annotations
 
-from typing import Any
-
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from felops.domain.state import AgentState
+from felops.domain.state import STATE_TYPES, AgentState
 from felops.orchestrator.nodes.responder import responder
 from felops.orchestrator.nodes.router import router
 
@@ -37,12 +38,12 @@ def build_graph(
     """Compile and return the agent state graph.
 
     Args:
-        checkpointer: Checkpoint saver to use. Defaults to MemorySaver
+        checkpointer: Checkpoint saver to use. Defaults to InMemorySaver
             (in-memory, suitable for tests and the P0 walking skeleton).
             Pass a Postgres checkpointer in production (task 3.1).
 
     Returns:
-        A compiled LangGraph ready to invoke or stream.
+        A stateful graph; build once per process and reuse.
 
     P0 graph topology:
         START → router → responder → END
@@ -81,7 +82,7 @@ def build_graph(
         guardrails_in → router edge. No other code changes.
     """
     if checkpointer is None:
-        checkpointer = MemorySaver()
+        checkpointer = InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=STATE_TYPES))
 
     builder = StateGraph(AgentState)
 
@@ -100,7 +101,7 @@ def build_graph(
     return builder.compile(checkpointer=checkpointer)
 
 
-def make_thread_config(workspace_id: str, conversation_id: str) -> dict[str, Any]:
+def make_thread_config(workspace_id: str, conversation_id: str) -> RunnableConfig:
     """Return a LangGraph config dict with the canonical thread_id.
 
     thread_id format: "{workspace_id}:{conversation_id}" (§2.3).
