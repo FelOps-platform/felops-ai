@@ -4,8 +4,9 @@ import os
 from contextvars import ContextVar
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Path, Security, status
+from fastapi import Depends, HTTPException, Path, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from langgraph.graph.state import CompiledStateGraph
 
 from felops.domain.workspace import WorkspaceContext
 
@@ -49,3 +50,10 @@ async def get_workspace_context(
     ctx = WorkspaceContext(workspace_id=workspace_id)
     _workspace_ctx_var.set(ctx)
     return ctx
+
+
+def get_graph(request: Request) -> CompiledStateGraph:
+    graph = getattr(request.app.state, "graph", None)
+    if graph is None:
+        raise RuntimeError("Graph has not been initialized on app.state.")
+    return graph
