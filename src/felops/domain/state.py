@@ -14,11 +14,11 @@ import operator
 import uuid
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from felops.domain.agent import (
     DEFAULT_AUDIENCE,
@@ -53,7 +53,7 @@ class Plan(BaseModel):
 
 
 class Chunk(BaseModel, frozen=True):
-    """A retrieved knowledge chunk with citation """
+    """A retrieved knowledge chunk with citation"""
 
     chunk_id: str
     source_id: str
@@ -62,12 +62,33 @@ class Chunk(BaseModel, frozen=True):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class SideEffectClass(StrEnum):
-    """Whether a tool call is read-only or side-effecting.
+class AgentInstructions(BaseModel):
+    """Agent instruction slots populated from wizard step 1."""
 
-    READ_ONLY      no idempotency key; always runs live (re-checks in verifier).
-    SIDE_EFFECTING  idempotency key required; protected by the executor ledger.
-    """
+    role: str = ""
+    language_constraints: str = ""
+    response_format: str = ""
+
+
+class AgentToolConfig(BaseModel):
+    """Tool selection S with per-tool user approval toggle."""
+
+    tool_id: str
+    requires_approval: bool = False
+
+
+class AgentConfig(BaseModel):
+    """Run-scoped agent configuration delivered per-request by the Backend."""
+
+    name: str = ""
+    description: str | None = None
+    instructions: AgentInstructions = Field(default_factory=AgentInstructions)
+    tools: list[AgentToolConfig] = Field(default_factory=list)
+    sub_agents: list[str] = Field(default_factory=lambda: ["customer_support"])
+
+
+class SideEffectClass(StrEnum):
+    """Whether a tool call is read-only or side-effecting."""
 
     READ_ONLY = "read_only"
     SIDE_EFFECTING = "side_effecting"
@@ -76,32 +97,19 @@ class SideEffectClass(StrEnum):
 class ToolCall(BaseModel):
     """A proposed or executed tool call.
 
-    idem_key is None for READ_ONLY calls.
-    idem_key must be set for SIDE_EFFECTING calls.
-    params_hash is computed from the frozen argument snapshot.
+    Under the V2 contract, idempotencyKey is generated for every tool call (reads and writes).
+    tool_id is the primary identifier matching the catalog and backend contract.
     """
 
     call_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    action_id: str
-    tool_name: str
+    tool_id: str
+    connector_id: str | None = None
+    tool_name: str = ""
     arguments: dict[str, Any] = Field(default_factory=dict)
     params_hash: str | None = None
     side_effect_class: SideEffectClass = SideEffectClass.READ_ONLY
-    idem_key: str | None = None  # None for READ_ONLY; set for SIDE_EFFECTING
+    idem_key: str | None = None
     outcome: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def validate_idempotency_key(self) -> Self:
-        """Enforce the invariant: idempotency key iff side-effecting."""
-        if self.side_effect_class == SideEffectClass.READ_ONLY and self.idem_key is not None:
-            raise ValueError(
-                "READ_ONLY tool calls must not carry an idem_key (reads always run live)."
-            )
-        if self.side_effect_class == SideEffectClass.SIDE_EFFECTING and not self.idem_key:
-            raise ValueError(
-                "SIDE_EFFECTING tool calls must carry an idem_key."
-            )
-        return self
 
 
 class ApprovalStatus(StrEnum):
@@ -125,7 +133,9 @@ class Approval(BaseModel):
 
     approval_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     call_id: str
-    action_id: str
+    tool_id: str
+    action: str = ""
+    integration: str = ""
     params: dict[str, Any] = Field(default_factory=dict)
     params_hash: str
     effect_summary: str = ""
@@ -140,18 +150,6 @@ class TraceEvent(BaseModel, frozen=True):
     event_type: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     data: dict[str, Any] = Field(default_factory=dict)
-
-
-class VerifierResult(BaseModel, frozen=True):
-    """Result of one verifier check.
-
-    One check per executed call, no retry.  A failed result sets
-    handoff=verify_failed in AgentState and routes to the responder.
-    """
-
-    passed: bool
-    evidence: str = ""
-    reason: str = ""
 
 
 # LangGraph state
@@ -169,14 +167,14 @@ class AgentState(BaseModel):
       execution_trace  operator.add: plain append (immutable TraceEvent items)
     """
 
-    # Identity  pinned at ingress by the submit-message use case 
+    # Identity  pinned at ingress by the submit-message use case
     workspace_id: str
     agent_id: str
     sub_agent_id: str = DEFAULT_SUB_AGENT_ID
     audience: Literal["external", "internal"] = DEFAULT_AUDIENCE
     channel: str = ""
     conversation_id: str = ""
-    config_version: str = ""
+    agent_config: AgentConfig | None = None
 
     # Conversation  LangGraph's add_messages deduplicates by message .id
     messages: Annotated[list[BaseMessage], add_messages] = Field(default_factory=list)
@@ -192,9 +190,32 @@ class AgentState(BaseModel):
     pending_approvals: list[Approval] = Field(default_factory=list)
 
     # Execution trace  operator.add appends TraceEvent items
+    # Note (DEFER to P4): execution_trace grows unboundedly across conversation turns.
+    # Bounding/compaction strategy (windowing, summarization, or offloading to storage)
+    # is deferred to P4 (observability & trace compaction).
     execution_trace: Annotated[list[TraceEvent], operator.add] = Field(default_factory=list)
 
-    # Verification & handoff (Verifier)
-    verifier_result: VerifierResult | None = None
+    # Confidence & handoff
     confidence: float = 0.0
     handoff: HandoffReason | None = None
+
+
+# Msgpack serialization allowlist shared by the P0 in-memory checkpointer and the
+# P3 Postgres checkpointer (via JsonPlusSerializer). Must contain classes or
+# (module, name) tuples — NEVER dotted strings.
+STATE_TYPES: tuple[type, ...] = (
+    # Pydantic value objects flowing through state channels
+    PlanStep,
+    Plan,
+    Chunk,
+    AgentInstructions,
+    AgentToolConfig,
+    AgentConfig,
+    ToolCall,
+    Approval,
+    TraceEvent,
+    # StrEnums appearing in state channels
+    SideEffectClass,
+    ApprovalStatus,
+    HandoffReason,
+)

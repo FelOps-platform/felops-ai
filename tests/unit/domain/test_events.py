@@ -9,16 +9,15 @@ from felops.domain.events import EventEnvelope, EventType
 
 
 class TestEventType:
-    def test_all_13_members_exist(self):
+    def test_all_12_members_exist(self):
         expected = {
             "plan.created",
             "retrieval.completed",
+            "config.warning",
             "tool.started",
             "tool.completed",
             "approval.required",
             "approval.resolved",
-            "verifier.passed",
-            "verifier.failed",
             "handoff.requested",
             "message.delta",
             "message.final",
@@ -29,18 +28,17 @@ class TestEventType:
         assert actual == expected
 
     def test_member_count(self):
-        assert len(EventType) == 13
+        assert len(EventType) == 12
 
     def test_wire_values_match_spec(self):
         """Each member's value must match exactly."""
         assert EventType.PLAN_CREATED == "plan.created"
         assert EventType.RETRIEVAL_COMPLETED == "retrieval.completed"
+        assert EventType.CONFIG_WARNING == "config.warning"
         assert EventType.TOOL_STARTED == "tool.started"
         assert EventType.TOOL_COMPLETED == "tool.completed"
         assert EventType.APPROVAL_REQUIRED == "approval.required"
         assert EventType.APPROVAL_RESOLVED == "approval.resolved"
-        assert EventType.VERIFIER_PASSED == "verifier.passed"
-        assert EventType.VERIFIER_FAILED == "verifier.failed"
         assert EventType.HANDOFF_REQUESTED == "handoff.requested"
         assert EventType.MESSAGE_DELTA == "message.delta"
         assert EventType.MESSAGE_FINAL == "message.final"

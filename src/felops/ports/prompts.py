@@ -30,9 +30,8 @@ class PromptContext:
     workspace_id: str
     agent_id: str
     sub_agent_id: str
-    # Pin to a config snapshot (§2.3). File-backed stores may ignore it; the
-    # Postgres store (P4) resolves the versions that snapshot recorded.
-    config_version: str | None = None
+    # Pin to a run execution (§2.3, §4). Postgres store (P4) pins template versions per run.
+    run_id: str | None = None
     node: str | None = None
  
  

@@ -28,12 +28,11 @@ class EventType(StrEnum):
 
     PLAN_CREATED = "plan.created"
     RETRIEVAL_COMPLETED = "retrieval.completed"
+    CONFIG_WARNING = "config.warning"
     TOOL_STARTED = "tool.started"
     TOOL_COMPLETED = "tool.completed"
     APPROVAL_REQUIRED = "approval.required"
     APPROVAL_RESOLVED = "approval.resolved"
-    VERIFIER_PASSED = "verifier.passed"
-    VERIFIER_FAILED = "verifier.failed"
     HANDOFF_REQUESTED = "handoff.requested"
     MESSAGE_DELTA = "message.delta"
     MESSAGE_FINAL = "message.final"
