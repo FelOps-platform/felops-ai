@@ -35,11 +35,17 @@ services:
       retries: 10
 
   mock-backend:
-    build: ./mocks/mock_backend
+    build:
+      context: .
+      dockerfile: mocks/mock_backend/Dockerfile
+    environment:
+      AI_SERVICE_URL: http://api:8000
+      BACKEND_IDENTITY_TOKEN: ${BACKEND_IDENTITY_TOKEN:-dev_backend_token}
+      AI_IDENTITY_TOKEN: ${AI_IDENTITY_TOKEN:-dev_ai_token}
     ports:
-      - "9001:9001"
+      - "8080:8080"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9001/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 5s
       retries: 10
 
@@ -49,7 +55,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       QDRANT_URL: http://qdrant:6333
       MOCK_MCP_URL: http://mock-mcp:9000
-      MOCK_BACKEND_URL: http://mock-backend:9001
+      BACKEND_URL: http://mock-backend:8080
+      BACKEND_IDENTITY_TOKEN: ${BACKEND_IDENTITY_TOKEN:-dev_backend_token}
+      AI_IDENTITY_TOKEN: ${AI_IDENTITY_TOKEN:-dev_ai_token}
     ports:
       - "8000:8000"
     depends_on:

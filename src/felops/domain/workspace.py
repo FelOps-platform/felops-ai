@@ -1,6 +1,6 @@
 """Workspace isolation types.
 
-WorkspaceContext is set once at ingress (from the X-Workspace-Id header) and
+WorkspaceContext is set once at ingress (from the /workspaces/{workspace_id}/ path parameter) and
 propagated into graph state, background-task context, MCP calls, log and trace
 baggage.  Repositories require it as a non-optional argument.
 """

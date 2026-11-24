@@ -9,7 +9,10 @@ from pydantic import ValidationError
 
 from felops.domain.agent import HandoffReason
 from felops.domain.state import (
+    AgentConfig,
+    AgentInstructions,
     AgentState,
+    AgentToolConfig,
     Approval,
     ApprovalStatus,
     Chunk,
@@ -18,7 +21,6 @@ from felops.domain.state import (
     SideEffectClass,
     ToolCall,
     TraceEvent,
-    VerifierResult,
 )
 
 # PlanStep
@@ -117,23 +119,23 @@ class TestSideEffectClass:
 
 class TestToolCall:
     def test_defaults(self):
-        tc = ToolCall(action_id="act-1", tool_name="shopify_lookup")
-        assert tc.action_id == "act-1"
+        tc = ToolCall(tool_id="tool-1", tool_name="shopify_lookup")
+        assert tc.tool_id == "tool-1"
         assert tc.tool_name == "shopify_lookup"
         assert tc.arguments == {}
         assert tc.params_hash is None
         assert tc.side_effect_class == SideEffectClass.READ_ONLY
-        assert tc.idem_key is None  # reads never carry a key
+        assert tc.idem_key is None
         assert tc.outcome is None
 
     def test_call_id_auto_generated(self):
-        a = ToolCall(action_id="a", tool_name="t")
-        b = ToolCall(action_id="a", tool_name="t")
+        a = ToolCall(tool_id="a", tool_name="t")
+        b = ToolCall(tool_id="a", tool_name="t")
         assert a.call_id != b.call_id
 
     def test_side_effecting_with_idem_key(self):
         tc = ToolCall(
-            action_id="act-2",
+            tool_id="tool-2",
             tool_name="quickbooks_send",
             side_effect_class=SideEffectClass.SIDE_EFFECTING,
             idem_key="idem-abc123",
@@ -141,32 +143,30 @@ class TestToolCall:
         assert tc.side_effect_class == SideEffectClass.SIDE_EFFECTING
         assert tc.idem_key == "idem-abc123"
 
-    def test_read_only_with_idem_key_rejected(self):
-        """Enforces: read-only calls must never carry an idempotency key."""
-        with pytest.raises(
-            ValidationError, match="READ_ONLY tool calls must not carry an idem_key"
-        ):
-            ToolCall(
-                action_id="act-1",
-                tool_name="shopify_lookup",
-                side_effect_class=SideEffectClass.READ_ONLY,
-                idem_key="forbidden-key",
-            )
+    def test_read_only_with_idem_key_allowed(self):
+        """V2 contract requires/allows idempotency key on read-only tool calls."""
+        tc = ToolCall(
+            tool_id="tool-1",
+            tool_name="shopify_lookup",
+            side_effect_class=SideEffectClass.READ_ONLY,
+            idem_key="idem-read-123",
+        )
+        assert tc.side_effect_class == SideEffectClass.READ_ONLY
+        assert tc.idem_key == "idem-read-123"
 
-    def test_side_effecting_without_idem_key_rejected(self):
-        """Enforces: side-effecting calls must always carry an idempotency key."""
-        with pytest.raises(
-            ValidationError, match="SIDE_EFFECTING tool calls must carry an idem_key"
-        ):
-            ToolCall(
-                action_id="act-2",
-                tool_name="quickbooks_send",
-                side_effect_class=SideEffectClass.SIDE_EFFECTING,
-                idem_key=None,
-            )
+    def test_tool_call_supports_tool_id_and_connector_id(self):
+        tc = ToolCall(
+            tool_id="vondera__get_product",
+            connector_id="vondera",
+            arguments={"productId": "prod_123"},
+            idem_key="idem-123",
+        )
+        assert tc.tool_id == "vondera__get_product"
+        assert tc.connector_id == "vondera"
+        assert tc.arguments == {"productId": "prod_123"}
 
     def test_mutable(self):
-        tc = ToolCall(action_id="a", tool_name="t")
+        tc = ToolCall(tool_id="a", tool_name="t")
         tc.outcome = {"status": "ok"}
         assert tc.outcome == {"status": "ok"}
 
@@ -190,8 +190,11 @@ class TestApprovalStatus:
 
 class TestApproval:
     def test_defaults(self):
-        ap = Approval(call_id="c-1", action_id="act-1", params_hash="hash-abc")
+        ap = Approval(call_id="c-1", tool_id="tool-1", params_hash="hash-abc")
         assert ap.status == ApprovalStatus.PENDING
+        assert ap.tool_id == "tool-1"
+        assert ap.action == ""
+        assert ap.integration == ""
         assert ap.params == {}
         assert ap.effect_summary == ""
         assert ap.expires_at is None
@@ -202,21 +205,25 @@ class TestApproval:
         snapshot = {"invoice_id": "INV-101", "amount": 250.0}
         ap = Approval(
             call_id="c-1",
-            action_id="act-1",
+            tool_id="tool-1",
+            action="Send invoice",
+            integration="QuickBooks",
             params=snapshot,
             params_hash="hash-abc",
             effect_summary="Send invoice INV-101 for $250.00",
         )
         assert ap.params == snapshot
+        assert ap.action == "Send invoice"
+        assert ap.integration == "QuickBooks"
         assert ap.effect_summary == "Send invoice INV-101 for $250.00"
 
     def test_approval_id_auto_generated(self):
-        a = Approval(call_id="c-1", action_id="a", params_hash="h")
-        b = Approval(call_id="c-1", action_id="a", params_hash="h")
+        a = Approval(call_id="c-1", tool_id="a", params_hash="h")
+        b = Approval(call_id="c-1", tool_id="a", params_hash="h")
         assert a.approval_id != b.approval_id
 
     def test_mutable_status(self):
-        ap = Approval(call_id="c-1", action_id="a", params_hash="h")
+        ap = Approval(call_id="c-1", tool_id="a", params_hash="h")
         ap.status = ApprovalStatus.APPROVED
         ap.approver_id = "user-42"
         assert ap.status == ApprovalStatus.APPROVED
@@ -251,29 +258,37 @@ class TestTraceEvent:
         assert result[1].event_type == "b"
 
 
-# VerifierResult
+# AgentConfig
 
 
-class TestVerifierResult:
-    def test_passed(self):
-        vr = VerifierResult(passed=True, evidence="invoice found", reason="ok")
-        assert vr.passed is True
-
-    def test_failed(self):
-        vr = VerifierResult(passed=False, evidence="invoice missing", reason="not sent")
-        assert vr.passed is False
-        assert vr.evidence == "invoice missing"
-        assert vr.reason == "not sent"
-
+class TestAgentConfig:
     def test_defaults(self):
-        vr = VerifierResult(passed=True)
-        assert vr.evidence == ""
-        assert vr.reason == ""
+        cfg = AgentConfig()
+        assert cfg.name == ""
+        assert cfg.description is None
+        assert cfg.instructions.role == ""
+        assert cfg.tools == []
+        assert cfg.sub_agents == ["customer_support"]
 
-    def test_frozen(self):
-        vr = VerifierResult(passed=True)
-        with pytest.raises(ValidationError):
-            vr.passed = False  # type: ignore[misc]
+    def test_custom_values(self):
+        cfg = AgentConfig(
+            name="Customer Experience",
+            description="Support agent",
+            instructions=AgentInstructions(
+                role="Help customers",
+                language_constraints="No refunds without approval",
+                response_format="Concise",
+            ),
+            tools=[
+                AgentToolConfig(tool_id="get_order", requires_approval=False),
+                AgentToolConfig(tool_id="refund_order", requires_approval=True),
+            ],
+            sub_agents=["customer_support"],
+        )
+        assert cfg.name == "Customer Experience"
+        assert len(cfg.tools) == 2
+        assert cfg.tools[1].requires_approval is True
+        assert cfg.instructions.role == "Help customers"
 
 
 # AgentState
@@ -291,7 +306,7 @@ class TestAgentState:
         assert state.audience == "external"
         assert state.channel == ""
         assert state.conversation_id == ""
-        assert state.config_version == ""
+        assert state.agent_config is None
 
     def test_empty_collections_by_default(self):
         state = AgentState(workspace_id="ws-1", agent_id="ag-1")
@@ -304,7 +319,6 @@ class TestAgentState:
     def test_none_fields_by_default(self):
         state = AgentState(workspace_id="ws-1", agent_id="ag-1")
         assert state.plan is None
-        assert state.verifier_result is None
         assert state.handoff is None
 
     def test_confidence_default(self):
@@ -376,8 +390,8 @@ class TestAgentState:
         assert state.plan is not None
         assert len(state.plan.steps) == 1
 
-    def test_verifier_result_can_be_set(self):
-        vr = VerifierResult(passed=True, evidence="ok")
-        state = AgentState(workspace_id="ws-1", agent_id="ag-1", verifier_result=vr)
-        assert state.verifier_result is not None
-        assert state.verifier_result.passed is True
+    def test_agent_config_can_be_set(self):
+        cfg = AgentConfig(name="Support")
+        state = AgentState(workspace_id="ws-1", agent_id="ag-1", agent_config=cfg)
+        assert state.agent_config is not None
+        assert state.agent_config.name == "Support"
