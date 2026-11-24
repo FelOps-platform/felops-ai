@@ -7,8 +7,9 @@ RUN pip install --no-cache-dir \
     "uvicorn==0.54.0" \
     "pydantic==2.14.1"
 
-COPY . .
+COPY mocks ./mocks
+COPY fixtures ./fixtures
 
-EXPOSE 9001
+EXPOSE 8080
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9001"]
+CMD ["uvicorn", "mocks.mock_backend.app:app", "--host", "0.0.0.0", "--port", "8080"]
