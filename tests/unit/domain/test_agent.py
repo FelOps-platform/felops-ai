@@ -82,19 +82,22 @@ class TestAgentRef:
 class TestHandoffReason:
     def test_all_members_exist(self):
         assert HandoffReason.LOW_CONFIDENCE
-        assert HandoffReason.VERIFY_FAILED
+        assert HandoffReason.TOOL_FAILED
+        assert HandoffReason.CONNECTOR_NOT_CONNECTED
         assert HandoffReason.ASSISTANCE_REQUESTED
 
     def test_wire_values(self):
         assert HandoffReason.LOW_CONFIDENCE == "low_confidence"
-        assert HandoffReason.VERIFY_FAILED == "verify_failed"
+        assert HandoffReason.TOOL_FAILED == "tool_failed"
+        assert HandoffReason.CONNECTOR_NOT_CONNECTED == "connector_not_connected"
         assert HandoffReason.ASSISTANCE_REQUESTED == "assistance_requested"
 
     def test_is_str(self):
         # StrEnum members are plain strings  safe for JSON serialisation
         assert isinstance(HandoffReason.LOW_CONFIDENCE, str)
-        assert isinstance(HandoffReason.VERIFY_FAILED, str)
+        assert isinstance(HandoffReason.TOOL_FAILED, str)
+        assert isinstance(HandoffReason.CONNECTOR_NOT_CONNECTED, str)
         assert isinstance(HandoffReason.ASSISTANCE_REQUESTED, str)
 
     def test_member_count(self):
-        assert len(HandoffReason) == 3
+        assert len(HandoffReason) == 4

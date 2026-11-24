@@ -1,0 +1,282 @@
+{
+  "version": 1,
+  "updated": "2026-11-21",
+  "description": "System catalog snapshot for the §8.2 Sara Ali demo and the P1-P3 tool contract tests. Fictional brand: Dar Nour. The mock backend pushes tools[] as PUT /catalog; examples and failure_example are fixture-only and are not part of the catalog.",
+  "tools": [
+    {
+      "tool_id": "lookup_order",
+      "connector_id": "shopify",
+      "version": 1,
+      "deprecated": false,
+      "description": "Read an order with its fulfillment, payment and refund status by order number.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_number": {
+            "type": "string",
+            "pattern": "^#?[0-9]{3,6}$",
+            "description": "Order number, with or without the leading #."
+          }
+        },
+        "required": ["order_number"],
+        "additionalProperties": false
+      },
+      "result_summary": "Order {order_number} · {status}",
+      "effect_summary": null
+    },
+    {
+      "tool_id": "refund_order",
+      "connector_id": "shopify",
+      "version": 1,
+      "deprecated": false,
+      "description": "Refund all or part of an order to the original payment method.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_number": {
+            "type": "string",
+            "pattern": "^#?[0-9]{3,6}$",
+            "description": "Order number, with or without the leading #."
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Refund amount in AED."
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["damaged_on_arrival", "defective", "wrong_item", "changed_mind", "other"]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Optional note recorded on the refund."
+          }
+        },
+        "required": ["order_number", "amount", "reason"],
+        "additionalProperties": false
+      },
+      "result_summary": "Refund {refund_id} · AED {amount} · {status}",
+      "effect_summary": "Refund AED {amount} on order {order_number} to the original payment method"
+    },
+    {
+      "tool_id": "send_invoice",
+      "connector_id": "quickbooks",
+      "version": 1,
+      "deprecated": false,
+      "description": "Email an existing tax invoice to the customer.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "invoice_number": {
+            "type": "string",
+            "pattern": "^INV-[0-9]{4}$",
+            "description": "Invoice number in the INV-nnnn format."
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Invoice amount in AED."
+          },
+          "recipient_email": {
+            "type": "string",
+            "format": "email",
+            "description": "Customer email that receives the invoice."
+          },
+          "order_number": {
+            "type": "string",
+            "pattern": "^#?[0-9]{3,6}$",
+            "description": "Optional source order, recorded for traceability."
+          }
+        },
+        "required": ["invoice_number", "amount", "recipient_email"],
+        "additionalProperties": false
+      },
+      "result_summary": "Invoice {invoice_number} sent to {recipient_email}",
+      "effect_summary": "Send invoice {invoice_number} for AED {amount} to {recipient_email}"
+    },
+    {
+      "tool_id": "get_invoice",
+      "connector_id": "quickbooks",
+      "version": 1,
+      "deprecated": false,
+      "description": "Read an invoice with its status, recipient and amount.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "invoice_number": {
+            "type": "string",
+            "pattern": "^INV-[0-9]{4}$",
+            "description": "Invoice number in the INV-nnnn format."
+          }
+        },
+        "required": ["invoice_number"],
+        "additionalProperties": false
+      },
+      "result_summary": "Invoice {invoice_number} · {status} · AED {amount}",
+      "effect_summary": null
+    },
+    {
+      "tool_id": "create_case",
+      "connector_id": "salesforce",
+      "version": 1,
+      "deprecated": false,
+      "description": "Open a support case for a customer issue that needs follow-up.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": { "type": "string", "minLength": 3, "maxLength": 120 },
+          "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "contact_email": { "type": "string", "format": "email" },
+          "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"] },
+          "order_number": {
+            "type": "string",
+            "pattern": "^#?[0-9]{3,6}$",
+            "description": "Optional related order."
+          }
+        },
+        "required": ["subject", "description", "contact_email", "priority"],
+        "additionalProperties": false
+      },
+      "result_summary": "Case {case_id} · {status} · {priority}",
+      "effect_summary": "Open a {priority}-priority support case: {subject}"
+    },
+    {
+      "tool_id": "get_case",
+      "connector_id": "salesforce",
+      "version": 1,
+      "deprecated": false,
+      "description": "Read a support case with its status and subject.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "pattern": "^CASE-[0-9]{4}$",
+            "description": "Case identifier in the CASE-nnnn format."
+          }
+        },
+        "required": ["case_id"],
+        "additionalProperties": false
+      },
+      "result_summary": "Case {case_id} · {status} · {priority}",
+      "effect_summary": null
+    }
+  ],
+  "examples": {
+    "lookup_order": {
+      "arguments": { "order_number": "#1042" },
+      "result": {
+        "status": "succeeded",
+        "data": {
+          "order_number": "#1042",
+          "status": "shipped",
+          "tracking_number": "TRK8812",
+          "total": 349.0,
+          "currency": "AED",
+          "refund_status": "none",
+          "refund_amount": null
+        },
+        "error": null
+      }
+    },
+    "refund_order": {
+      "arguments": { "order_number": "#1042", "amount": 120.0, "reason": "damaged_on_arrival" },
+      "result": {
+        "status": "succeeded",
+        "data": {
+          "refund_id": "RFD-3081",
+          "order_number": "#1042",
+          "amount": 120.0,
+          "status": "completed",
+          "currency": "AED"
+        },
+        "error": null
+      }
+    },
+    "send_invoice": {
+      "arguments": {
+        "invoice_number": "INV-2210",
+        "amount": 349.0,
+        "recipient_email": "sara.ali@example.com",
+        "order_number": "#1042"
+      },
+      "result": {
+        "status": "succeeded",
+        "data": {
+          "invoice_number": "INV-2210",
+          "status": "sent",
+          "recipient_email": "sara.ali@example.com",
+          "sent_at": "2026-10-26T10:15:00+04:00"
+        },
+        "error": null
+      }
+    },
+    "get_invoice": {
+      "arguments": { "invoice_number": "INV-2210" },
+      "result": {
+        "status": "succeeded",
+        "data": {
+          "invoice_number": "INV-2210",
+          "status": "sent",
+          "recipient_email": "sara.ali@example.com",
+          "amount": 349.0,
+          "currency": "AED",
+          "issued_at": "2026-10-26T10:15:00+04:00"
+        },
+        "error": null
+      }
+    },
+    "create_case": {
+      "arguments": {
+        "subject": "Damaged lamp on order #1042",
+        "description": "The ceramic base arrived cracked. The customer asks for a replacement or a refund.",
+        "contact_email": "sara.ali@example.com",
+        "priority": "high",
+        "order_number": "#1042"
+      },
+      "result": {
+        "status": "succeeded",
+        "data": {
+          "case_id": "CASE-5512",
+          "status": "open",
+          "subject": "Damaged lamp on order #1042",
+          "priority": "high",
+          "created_at": "2026-10-26T11:40:00+04:00"
+        },
+        "error": null
+      }
+    },
+    "get_case": {
+      "arguments": { "case_id": "CASE-5512" },
+      "result": {
+        "status": "succeeded",
+        "data": {
+          "case_id": "CASE-5512",
+          "status": "open",
+          "subject": "Damaged lamp on order #1042",
+          "priority": "high",
+          "updated_at": "2026-10-26T11:40:00+04:00"
+        },
+        "error": null
+      }
+    }
+  },
+  "failure_example": {
+    "tool_id": "send_invoice",
+    "arguments": {
+      "invoice_number": "INV-2210",
+      "amount": 349.0,
+      "recipient_email": "sara.ali@example.com",
+      "order_number": "#1042"
+    },
+    "result": {
+      "status": "failed",
+      "data": null,
+      "error": {
+        "code": "provider_error",
+        "message": "QuickBooks did not respond after retries."
+      }
+    }
+  }
+}

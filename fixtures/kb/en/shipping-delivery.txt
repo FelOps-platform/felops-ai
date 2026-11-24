@@ -1,0 +1,39 @@
+# Shipping & Delivery Policy
+
+Dar Nour ships home and lifestyle products from our warehouse in Dubai, United Arab Emirates. This policy applies to every order placed through darnour.example, our WhatsApp channel or our customer support team.
+
+## Delivery areas and times
+
+- Dubai, Sharjah and Ajman: 1 to 2 business days after dispatch.
+- Abu Dhabi, Al Ain, Ras Al Khaimah, Fujairah and Umm Al Quwain: 2 to 4 business days after dispatch.
+- GCC countries (Saudi Arabia, Kuwait, Qatar, Bahrain and Oman): 4 to 7 business days, and customs clearance can add 2 to 3 business days.
+- Business days are Monday to Friday, excluding public holidays. Orders placed after 14:00 are processed on the next business day.
+- We deliver only within the UAE and the GCC. We do not ship to other countries.
+
+## Shipping fees
+
+- Standard delivery is free for orders of AED 250 or more.
+- Orders below AED 250 pay AED 25 for standard delivery.
+- Cash on delivery adds AED 15, as described in Payments & Invoices.
+- A surcharge of AED 40 may apply to remote areas. It is shown at checkout before payment.
+- We do not deliver to PO boxes.
+
+## Tracking your order
+
+- Every dispatched order receives a tracking number in the format TRK followed by four digits, for example TRK8812.
+- The tracking number is sent by email and SMS when the parcel leaves the warehouse.
+- Tracking updates may take up to 12 hours to appear after dispatch.
+- Support can confirm the current status from the order number, for example order #1042.
+
+## Delivery attempts
+
+- The carrier makes two delivery attempts on separate business days.
+- We contact you on the phone number in the order before each attempt.
+- After two failed attempts the parcel returns to the warehouse. We then refund the order minus the delivery fee.
+
+## Delays and missing parcels
+
+- If delivery is more than 3 business days past the estimate, contact support to open a carrier investigation.
+- An investigation takes up to 10 business days.
+- If the parcel is confirmed lost, we send a replacement or refund the full amount, including delivery fees.
+- Report damage in transit within 48 hours, as described in Returns & Refunds.
