@@ -3,13 +3,18 @@
 The single swap point for conversation and customer memory.  Adapters:
 Postgres (P4), Redis, vector-backed.
 
-The scope is the entire partition key (§2.3): items written under one
-workspace, agent or thread are never returned under another.  ``read`` never
-widens the scope to be helpful; callers that need long-term and thread memory
-issue two reads with two scopes.
+Workspace and thread scoping (§2.3, §4, task 7.9):
 
-``write`` is an upsert by ``MemoryItem.item_id`` so a retried write cannot
-duplicate a fact.
+* Workspace and thread boundaries are strict: reads never cross workspaces and
+  never mix long-term memory (``thread_id=None``) with thread-scoped memory.
+  Callers that need both compose two reads.
+* Long-term memory is workspace-scoped: items written with ``agent_id=None``
+  are readable from any agent in that workspace (as well as workspace-wide
+  reads with ``agent_id=None``).  Items written with a specific ``agent_id``
+  remain isolated to that agent.
+
+``write`` is an upsert by ``MemoryItem.item_id`` so retried writes of the same
+item cannot create duplicate records.
 """
 
 from __future__ import annotations
@@ -25,12 +30,15 @@ class MemoryStore(Protocol):
     Methods
     -------
     `read`
-        Return the items stored under exactly *scope*, narrowed by *q* when
-        it is given.  ``q=None`` means "everything in scope"; an adapter may
-        rank by similarity or recency, but never crosses the scope.
+        Return items visible under *scope*, narrowed or ranked by *q* when it
+        is given.  ``q=None`` returns all items visible under *scope*.  An
+        adapter may rank by similarity or recency, and never crosses workspace
+        or thread boundaries.  When ``scope.agent_id`` is set, workspace-wide
+        items (written with ``agent_id=None`` for the same workspace and
+        ``thread_id``) are also visible.
     `write`
-        Store *items* under *scope*, replacing any existing item with the
-        same ``item_id``.
+        Store *items* under *scope*, replacing any existing item in that exact
+        scope with the same ``item_id``.
     """
 
     async def read(self, scope: MemoryScope, q: str | None) -> list[MemoryItem]: ...

@@ -1,13 +1,13 @@
 """Connector protocol — §5.1.
 
 The single swap point for tool transport.  Adapters: MCP server (P1), REST
-connector, native SDK.  The executor, verifier and Tool Registry depend on
-this port, never on a vendor SDK.
+connector, native SDK.  The executor and Tool Registry depend on this port,
+never on a vendor SDK.
 
-Idempotency (§4.1, §2.2): the caller passes ``idem_key`` iff the call is
-side-effecting; a read-only call passes ``None`` and always runs live.  The
-connector forwards the key verbatim and never invents one.  Duplicate
-suppression belongs to the executor's ledger, not to this port.
+Idempotency (§4.3, ``ai-service-contract.md`` §4.3): **every** call (reads and
+writes) carries a required ``idem_key``.  The connector forwards the key
+verbatim and never invents one.  Duplicate suppression belongs to the
+executor's ledger and the backend, not to this port.
 """
 
 from __future__ import annotations
@@ -26,15 +26,18 @@ class Connector(Protocol):
     `list_tools`
         Discover the tools this connector exposes for *ctx*.
     `call`
-        Invoke *tool* with *args* and return its result.
+        Invoke *tool* (the stable ``ToolSpec.tool_id``) with *args* and a
+        required *idem_key*, returning a structured ``ToolResult``.
 
-    ``tool`` is the connector-level name (``ToolSpec.name``), not the
-    workspace ``action_id``; the Tool Registry maps one to the other.
+    Isolation (§2.3): ``ctx`` scopes tools and workspace execution on every
+    call.  Credentials never leave the backend.
 
-    Isolation (§2.3): ``ctx`` scopes credentials and data on every call.
-
-    Errors: a tool-level failure is returned as ``ToolResult(ok=False)``;
-    transport failures (connection, auth, timeout) may raise.
+    Errors (§4.2): execution failures — including provider errors, exhausted
+    retries, and disconnected or unauthorized connectors
+    (``code="connector_not_connected"``) — are returned as
+    ``ToolResult(status="failed", data=None, error=ToolError(...))`` so the
+    executor can route directly to the appropriate handoff path instead of
+    crashing with an uncaught exception.
     """
 
     async def list_tools(self, ctx: WorkspaceContext) -> list[ToolSpec]: ...
@@ -44,5 +47,5 @@ class Connector(Protocol):
         tool: str,
         args: dict[str, Any],
         ctx: WorkspaceContext,
-        idem_key: str | None = None,
+        idem_key: str,
     ) -> ToolResult: ...
