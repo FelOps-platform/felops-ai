@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 from contextvars import ContextVar
 from typing import Annotated
@@ -28,13 +29,22 @@ async def verify_backend_identity(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Security(security)],
 ) -> None:
     expected_token = os.getenv("BACKEND_IDENTITY_TOKEN")
-    if not expected_token:
-        # If token not configured in environment, allow request (development convenience)
-        return
-    if credentials is None or credentials.credentials != expected_token:
+    if not expected_token or not expected_token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="BACKEND_IDENTITY_TOKEN is not configured.",
+        )
+    if (
+        credentials is None
+        or not credentials.credentials
+        or not hmac.compare_digest(
+            credentials.credentials.encode("utf-8"), expected_token.encode("utf-8")
+        )
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing authentication token.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
 
