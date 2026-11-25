@@ -34,6 +34,21 @@ services:
       interval: 5s
       retries: 10
 
+  mock-backend:
+    build:
+      context: .
+      dockerfile: mocks/mock_backend/Dockerfile
+    environment:
+      AI_SERVICE_URL: http://api:8000
+      BACKEND_IDENTITY_TOKEN: ${BACKEND_IDENTITY_TOKEN:-dev_backend_token}
+      AI_IDENTITY_TOKEN: ${AI_IDENTITY_TOKEN:-dev_ai_token}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 5s
+      retries: 10
+
   api:
     build: .
     environment:
@@ -51,6 +66,8 @@ services:
       qdrant:
         condition: service_healthy
       mock-mcp:
+        condition: service_healthy
+      mock-backend:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]

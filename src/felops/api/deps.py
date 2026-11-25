@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 from contextvars import ContextVar
 from typing import Annotated
@@ -17,6 +18,26 @@ _workspace_ctx_var: ContextVar[WorkspaceContext | None] = ContextVar(
 security = HTTPBearer(auto_error=False)
 
 
+def _read_configured_token(env_var: str) -> str | None:
+    token = os.getenv(env_var)
+    if token is None:
+        return None
+    if not token.strip():
+        return None
+    return token
+
+
+def _matches_bearer_token(
+    credentials: HTTPAuthorizationCredentials | None, expected_token: str
+) -> bool:
+    if credentials is None:
+        return False
+    presented = credentials.credentials
+    if not presented:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8"), expected_token.encode("utf-8"))
+
+
 def get_current_workspace_context() -> WorkspaceContext:
     ctx = _workspace_ctx_var.get()
     if ctx is None:
@@ -27,14 +48,17 @@ def get_current_workspace_context() -> WorkspaceContext:
 async def verify_backend_identity(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Security(security)],
 ) -> None:
-    expected_token = os.getenv("BACKEND_IDENTITY_TOKEN")
-    if not expected_token:
-        # If token not configured in environment, allow request (development convenience)
-        return
-    if credentials is None or credentials.credentials != expected_token:
+    expected_token = _read_configured_token("BACKEND_IDENTITY_TOKEN")
+    if expected_token is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="BACKEND_IDENTITY_TOKEN is not configured.",
+        )
+    if not _matches_bearer_token(credentials, expected_token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing authentication token.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
 
