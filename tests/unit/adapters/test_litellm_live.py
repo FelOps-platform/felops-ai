@@ -39,14 +39,18 @@ from felops.ports.prompts import PromptContext
 _ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
+def _has_valid_trailing(val: str, end: int) -> bool:
+    trailing = val[end + 1 :].strip()
+    return not trailing or trailing.startswith("#")
+
+
 def _unquote_env_value(val: str) -> str | None:
     if len(val) < 2 or val[0] not in ('"', "'"):
         return None
     end = val.find(val[0], 1)
     if end == -1:
         return None
-    trailing = val[end + 1 :].strip()
-    if trailing and not trailing.startswith("#"):
+    if not _has_valid_trailing(val, end):
         return None
     return val[1:end]
 
@@ -59,15 +63,23 @@ def _parse_env_value(raw: str) -> str:
     return val.split("#", 1)[0].strip()
 
 
+_EXPORT_PREFIX = re.compile(r"^export\s+(.*)$")
+
+
 def _strip_export_prefix(line: str) -> str:
-    if line.startswith("export") and len(line) > 6 and line[6].isspace():
-        return line[6:].lstrip()
-    return line
+    match = _EXPORT_PREFIX.match(line)
+    if match is None:
+        return line
+    return match.group(1)
+
+
+def _is_comment_or_blank(line: str) -> bool:
+    return not line or line.startswith("#")
 
 
 def _parse_env_line(raw: str) -> tuple[str, str] | None:
     line = raw.strip()
-    if not line or line.startswith("#") or "=" not in line:
+    if _is_comment_or_blank(line) or "=" not in line:
         return None
     key, _, value = _strip_export_prefix(line).partition("=")
     key, value = key.strip(), _parse_env_value(value)
@@ -121,6 +133,13 @@ def _provider(**kw: Any) -> LiteLLMProvider:
     return LiteLLMProvider(provider="groq", capabilities=CAPS, default_model=MODEL, **kw)
 
 
+def _is_rate_limit_error(exc: LLMError) -> bool:
+    if not exc.retryable:
+        return False
+    text = str(exc)
+    return "RateLimitError" in text or "status=429" in text
+
+
 def _run(coro: Awaitable[T]) -> T:
     """Run a call; turn a free-tier rate limit into a skip, not a failure."""
 
@@ -130,7 +149,7 @@ def _run(coro: Awaitable[T]) -> T:
     try:
         return asyncio.run(go())
     except LLMError as exc:
-        if exc.retryable and ("RateLimitError" in str(exc) or "status=429" in str(exc)):
+        if _is_rate_limit_error(exc):
             pytest.skip("Groq rate limit hit (free tier)")
         raise
 

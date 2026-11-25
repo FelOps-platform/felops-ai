@@ -78,26 +78,42 @@ def _to_llm_error(exc: Exception) -> LLMError:
     if isinstance(exc, LLMError):
         return exc
     status = getattr(exc, "status_code", None)
-    retryable = isinstance(exc, _RETRYABLE_ERRORS) or (
-        isinstance(status, int) and (status >= 500 or status in _RETRYABLE_STATUS)
-    )
+    retryable = _is_retryable_exception(exc, status)
     suffix = f" (status={status})" if isinstance(status, int) else ""
     return LLMError(f"{type(exc).__name__}{suffix}", retryable=retryable)
 
 
+def _is_retryable_exception(exc: Exception, status: Any) -> bool:
+    if isinstance(exc, _RETRYABLE_ERRORS):
+        return True
+    if not isinstance(status, int):
+        return False
+    return status >= 500 or status in _RETRYABLE_STATUS
+
+
+def _non_negative_int(usage: Any, key: str) -> int:
+    value = _get(usage, key, 0)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    if value < 0:
+        return 0
+    return value
+
+
 def _to_usage(usage: Any) -> TokenUsage:
     """Tolerant on purpose: a billing field must never kill a good response."""
-
-    def _count(key: str) -> int:
-        value = _get(usage, key, 0)
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-            return value
-        return 0
-
     return TokenUsage(
-        prompt_tokens=_count("prompt_tokens"),
-        completion_tokens=_count("completion_tokens"),
+        prompt_tokens=_non_negative_int(usage, "prompt_tokens"),
+        completion_tokens=_non_negative_int(usage, "completion_tokens"),
     )
+
+
+def _normalise_finish_raw(raw: Any) -> FinishReason | None:
+    if not raw:
+        return None
+    if not isinstance(raw, str):
+        return "error"
+    return _FINISH_MAP.get(raw, "error")
 
 
 def _resolve_finish(
@@ -114,10 +130,7 @@ def _resolve_finish(
     - tool calls present but reason is stop/missing (some providers, notably
       Gemini via LiteLLM) -> "tool_calls". Error/length are never overridden.
     """
-    if not raw:
-        finish: FinishReason | None = None
-    else:
-        finish = _FINISH_MAP.get(raw, "error") if isinstance(raw, str) else "error"
+    finish = _normalise_finish_raw(raw)
     if has_tool_calls and finish in (None, "stop"):
         return "tool_calls"
     return finish if finish is not None else missing
@@ -134,19 +147,21 @@ def _build_tool_call(call_id: str, name: str, raw_args: Any) -> LLMToolCall:
 
 def _parse_tool_arguments(raw_args: Any) -> dict[str, Any]:
     if raw_args is None or raw_args == "":
-        arguments: dict[str, Any] = {}
-    elif isinstance(raw_args, Mapping):
-        arguments = dict(raw_args)
-    else:
-        try:
-            parsed = json.loads(raw_args)
-        except (TypeError, ValueError):
-            # Broken JSON from the model is non-deterministic: a retry may succeed.
-            raise LLMError("malformed tool arguments", retryable=True) from None
-        if not isinstance(parsed, dict):
-            raise LLMError("tool arguments must be an object", retryable=True)
-        arguments = parsed
-    return arguments
+        return {}
+    if isinstance(raw_args, Mapping):
+        return dict(raw_args)
+    return _decode_json_object(raw_args)
+
+
+def _decode_json_object(raw_args: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw_args)
+    except (TypeError, ValueError):
+        # Broken JSON from the model is non-deterministic: a retry may succeed.
+        raise LLMError("malformed tool arguments", retryable=True) from None
+    if not isinstance(parsed, dict):
+        raise LLMError("tool arguments must be an object", retryable=True)
+    return parsed
 
 
 def _delta_index(delta: Any, position: int) -> int:
@@ -154,13 +169,17 @@ def _delta_index(delta: Any, position: int) -> int:
     return index if isinstance(index, int) and not isinstance(index, bool) else position
 
 
+def _validate_non_blank(value: str, message: str) -> None:
+    if not value.strip():
+        raise ValueError(message)
+
+
 def _validate_provider_config(
     provider: str, capabilities: ProviderCaps, default_model: str | None, timeout: float
 ) -> None:
-    if not provider or not provider.strip():
-        raise ValueError("provider must not be empty")
-    if default_model is not None and not default_model.strip():
-        raise ValueError("default_model must not be blank")
+    _validate_non_blank(provider, "provider must not be empty")
+    if default_model is not None:
+        _validate_non_blank(default_model, "default_model must not be blank")
     if capabilities.max_ctx <= 0:
         raise ValueError("capabilities.max_ctx must be positive")
     if timeout <= 0:
@@ -173,6 +192,12 @@ def _request_option_kwargs(req: LLMRequest) -> dict[str, Any]:
         kwargs["max_tokens"] = req.max_tokens
     if req.json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+    kwargs.update(_optional_collection_kwargs(req))
+    return kwargs
+
+
+def _optional_collection_kwargs(req: LLMRequest) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
     if req.tools:
         kwargs["tools"] = [_tool_to_dict(t) for t in req.tools]
     if req.stop:
@@ -225,14 +250,7 @@ class _StreamState:
     usage: TokenUsage | None = None
 
 
-def _process_chunk(chunk: Any, state: _StreamState) -> str | None:
-    chunk_usage = _get(chunk, "usage")
-    if chunk_usage is not None:
-        state.usage = _to_usage(chunk_usage)
-    choices = _get(chunk, "choices") or []
-    if not choices:
-        return None
-    choice = choices[0]
+def _apply_choice_delta(choice: Any, state: _StreamState) -> str | None:
     delta = _get(choice, "delta")
     state.calls.add(_get(delta, "tool_calls"))
     text = _text_of(_get(delta, "content"))
@@ -240,6 +258,16 @@ def _process_chunk(chunk: Any, state: _StreamState) -> str | None:
     if reason:
         state.finish_raw = reason
     return text or None
+
+
+def _process_chunk(chunk: Any, state: _StreamState) -> str | None:
+    chunk_usage = _get(chunk, "usage")
+    if chunk_usage is not None:
+        state.usage = _to_usage(chunk_usage)
+    choices = _get(chunk, "choices") or []
+    if not choices:
+        return None
+    return _apply_choice_delta(choices[0], state)
 
 
 def _terminal_chunk(state: _StreamState) -> LLMChunk:
@@ -284,7 +312,7 @@ class _ToolCallAccumulator:
 
     def _get_or_create_slot(self, index: int, call_id: str) -> _Slot:
         slot = self._by_index.get(index)
-        if slot is None or (call_id and slot.id and call_id != slot.id):
+        if _is_new_call(slot, call_id):
             slot = _Slot()
             self._slots.append(slot)
             self._by_index[index] = slot
@@ -299,6 +327,14 @@ class _ToolCallAccumulator:
 
     def build(self) -> tuple[LLMToolCall, ...]:
         return tuple(_build_tool_call(s.id, s.name, "".join(s.args)) for s in self._slots)
+
+
+def _is_new_call(slot: _Slot | None, call_id: str) -> bool:
+    if slot is None:
+        return True
+    if not call_id or not slot.id:
+        return False
+    return call_id != slot.id
 
 
 # -- the adapter -----------------------------------------------------------
