@@ -1,0 +1,13 @@
+{
+  "name": "Sara Support (Draft)",
+  "description": "Wizard draft fixture for config:validate.",
+  "instructions": {
+    "role": "Help Dar Nour customers resolve order and shipping questions.",
+    "language_constraints": "Reply in the customer's language: Arabic or English.",
+    "response_format": "Concise and friendly."
+  },
+  "tools": [
+    { "tool_id": "lookup_order", "requires_approval": false }
+  ],
+  "sub_agents": ["customer_support"]
+}

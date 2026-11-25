@@ -13,7 +13,6 @@ dependencies = [
     "langchain-core==1.6.12",
     "langgraph==1.2.16",
     "litellm==1.106.4",
-    "mcp>=2.3.0",
 ]
 
 [project.optional-dependencies]
@@ -31,10 +30,15 @@ packages = ["src/felops"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src", "tests", "mocks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests"]
+markers = ["live: live LLM API round-trip tests (requires API_KEY)"]
 
 [tool.importlinter]
 root_package = "felops"
@@ -44,7 +48,3 @@ name = "Orchestrator depends only on ports and domain"
 type = "forbidden"
 source_modules = ["felops.orchestrator"]
 forbidden_modules = ["felops.adapters", "felops.api", "felops.app", "felops.services"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src", "."]
-testpaths = ["tests"]

@@ -24,18 +24,18 @@
 
 **Goal:** a repo that boots and answers one message through a stub graph. **Exit:** `make up`, then POST a message and get an LLM reply.
 
-| ID | Task | Module (§) | Own | Days | Dep | Done when |
-| --- | --- | --- | --- | --- | --- | --- |
-| 0.1 | Repo skeleton: `ports/ domain/ adapters/ orchestrator/`, import-linter, CI | §5 | D | 2 | – | CI green |
-| 0.2 | Docker compose: API, Postgres, Qdrant, mock MCP | §3 | D | 1 | 0.1 | `make up` healthy |
-| 0.3 | Domain types: WorkspaceContext, AgentRef (constant), AgentState, event envelope | §2.3, §6.1, §7.2 | A | 2 | 0.1 | Unit tests pass |
-| 0.4 | Protocols: LLMProvider, PromptStore | §5.1 | D | 1 | 0.1 | Contract test stub |
-| 0.5 | Protocols: VectorStore, EmbeddingModel | §5.1 | B | 1 | 0.1 | Contract test stub |
-| 0.6 | Protocols: Connector (optional idempotency key), MemoryStore | §5.1 | C | 1 | 0.1 | Contract test stub |
-| 0.7 | LLM adapter (LiteLLM, one provider) + file PromptStore | §4 Gateway, Prompt Registry | D | 2 | 0.4 | Completion works |
-| 0.8 | Mock backend: catalog endpoints, `agent_config` fixtures, file URLs, webhook sink | §7.1 | C | 3 | 0.1 | Endpoints answer |
-| 0.9 | Walking skeleton graph: router → responder, in-memory checkpoint | §6.3 | A | 3 | 0.3 | Canned reply via graph |
-| 0.10 | Fixtures: AR+EN docs, 20 Q&A, 6 catalog tool entries | §8.2 | B | 2 | – | Files in repo |
+| ID   | Task                                                                              | Module (§)                  | Own | Days | Dep | Done when              |
+| ---- | --------------------------------------------------------------------------------- | --------------------------- | --- | ---- | --- | ---------------------- |
+| 0.1  | Repo skeleton: `ports/ domain/ adapters/ orchestrator/`, import-linter, CI        | §5                          | D   | 2    | –   | CI green               |
+| 0.2  | Docker compose: API, Postgres, Qdrant, mock MCP                                   | §3                          | D   | 1    | 0.1 | `make up` healthy      |
+| 0.3  | Domain types: WorkspaceContext, AgentRef (constant), AgentState, event envelope   | §2.3, §6.1, §7.2            | A   | 2    | 0.1 | Unit tests pass        |
+| 0.4  | Protocols: LLMProvider, PromptStore                                               | §5.1                        | D   | 1    | 0.1 | Contract test stub     |
+| 0.5  | Protocols: VectorStore, EmbeddingModel                                            | §5.1                        | B   | 1    | 0.1 | Contract test stub     |
+| 0.6  | Protocols: Connector, MemoryStore                                                 | §5.1                        | C   | 1    | 0.1 | Contract test stub     |
+| 0.7  | LLM adapter (LiteLLM, one provider) + file PromptStore                            | §4 Gateway, Prompt Registry | D   | 2    | 0.4 | Completion works       |
+| 0.8  | Mock backend: catalog endpoints, `agent_config` fixtures, file URLs, webhook sink | §7.1                        | C   | 3    | 0.1 | Endpoints answer       |
+| 0.9  | Walking skeleton graph: router → responder, in-memory checkpoint                  | §6.3                        | A   | 3    | 0.3 | Canned reply via graph |
+| 0.10 | Fixtures: AR+EN docs, 20 Q&A, 6 catalog tool entries                              | §8.2                        | B   | 2    | –   | Files in repo          |
 
 ### P1 — RAG slice · 26/10 → 08/11
 
