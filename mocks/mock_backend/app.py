@@ -22,8 +22,10 @@ webhook sink.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -34,7 +36,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security, status
 from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LOCAL_FIXTURES = Path(__file__).parent / "fixtures"
@@ -87,15 +89,22 @@ class CatalogPushRequest(BaseModel):
 class WebhookEvent(BaseModel):
     """A webhook envelope sent by the AI repo (§9).
 
-    Only ``type`` is strictly required; ``event_id`` enables idempotent
-    deduplication when supplied, and all remaining envelope/data fields are
+    Required envelope fields follow §9; extra event-specific fields are
     preserved for inspection.
     """
 
     model_config = ConfigDict(extra="allow")
 
+    event_id: str = Field(min_length=1)
+    seq: int = Field(ge=0)
+    ts: datetime
     type: str
-    event_id: str | None = None
+    workspace_id: str | int
+    agent_id: str | int
+    sub_agent_id: str
+    conversation_id: str | int | None = None
+    job_id: str | int | None = None
+    data: dict[str, Any]
 
 
 def create_app(
@@ -118,6 +127,7 @@ def create_app(
 
     received_events: list[dict[str, Any]] = []
     seen_event_ids: set[str] = set()
+    events_lock = threading.Lock()
 
     def _expected_ai_token() -> str | None:
         if ai_identity_token is not None:
@@ -136,12 +146,22 @@ def create_app(
         credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
     ) -> None:
         expected = _expected_ai_token()
-        if not expected:
-            return
-        if credentials is None or credentials.credentials != expected:
+        if not expected or not expected.strip():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AI_IDENTITY_TOKEN is not configured.",
+            )
+        if (
+            credentials is None
+            or not credentials.credentials
+            or not hmac.compare_digest(
+                credentials.credentials.encode("utf-8"), expected.encode("utf-8")
+            )
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or missing AI identity token.",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
     def _catalog_tools() -> list[dict[str, Any]]:
@@ -167,7 +187,7 @@ def create_app(
 
     @app.post("/catalog/push")
     def push_catalog(body: CatalogPushRequest | None = None) -> dict[str, Any]:
-        base_url = (body.target_url if body and body.target_url else _resolved_ai_service_url())
+        base_url = body.target_url if body and body.target_url else _resolved_ai_service_url()
         target = f"{base_url.rstrip('/')}/catalog"
         tools = _catalog_tools()
         headers = {"Content-Type": "application/json"}
@@ -256,28 +276,30 @@ def create_app(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"unknown event type: {event.type}",
             )
-        if event.event_id is not None and event.event_id in seen_event_ids:
-            return {"received": True, "duplicate": True}
-
-        payload = event.model_dump(exclude_none=True)
+        payload = event.model_dump(mode="json", exclude_none=True)
         payload["received_at"] = datetime.now(timezone.utc).isoformat()
-        received_events.append(payload)
-        if event.event_id is not None:
+        with events_lock:
+            if event.event_id in seen_event_ids:
+                return {"received": True, "duplicate": True}
             seen_event_ids.add(event.event_id)
+            received_events.append(payload)
         return {"received": True, "duplicate": False}
 
     @app.get("/webhooks/ai")
     def list_webhooks(
         event_type: str | None = Query(default=None, alias="type"),
     ) -> list[dict[str, Any]]:
+        with events_lock:
+            events_snapshot = list(received_events)
         if event_type is None:
-            return list(received_events)
-        return [event for event in received_events if event["type"] == event_type]
+            return events_snapshot
+        return [event for event in events_snapshot if event["type"] == event_type]
 
     @app.delete("/webhooks/ai", status_code=status.HTTP_204_NO_CONTENT)
     def clear_webhooks() -> None:
-        received_events.clear()
-        seen_event_ids.clear()
+        with events_lock:
+            received_events.clear()
+            seen_event_ids.clear()
 
     return app
 
