@@ -87,17 +87,10 @@ class AgentConfig(BaseModel):
     sub_agents: list[str] = Field(default_factory=lambda: ["customer_support"])
 
 
-class SideEffectClass(StrEnum):
-    """Whether a tool call is read-only or side-effecting."""
-
-    READ_ONLY = "read_only"
-    SIDE_EFFECTING = "side_effecting"
-
-
 class ToolCall(BaseModel):
     """A proposed or executed tool call.
 
-    Under the V2 contract, idempotencyKey is generated for every tool call (reads and writes).
+    Under the V2 contract, ``idem_key`` is required for every tool call (reads and writes).
     tool_id is the primary identifier matching the catalog and backend contract.
     """
 
@@ -107,8 +100,7 @@ class ToolCall(BaseModel):
     tool_name: str = ""
     arguments: dict[str, Any] = Field(default_factory=dict)
     params_hash: str | None = None
-    side_effect_class: SideEffectClass = SideEffectClass.READ_ONLY
-    idem_key: str | None = None
+    idem_key: str
     outcome: dict[str, Any] | None = None
 
 
@@ -215,7 +207,6 @@ STATE_TYPES: tuple[type, ...] = (
     Approval,
     TraceEvent,
     # StrEnums appearing in state channels
-    SideEffectClass,
     ApprovalStatus,
     HandoffReason,
 )
