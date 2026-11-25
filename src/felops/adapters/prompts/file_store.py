@@ -45,9 +45,12 @@ class FilePromptStore:
         if not _SAFE_ID.fullmatch(name):
             raise PromptNotFound(f"invalid prompt name: {name!r}")
 
-        candidates: list[tuple[PromptScope, Path]] = []
         sub_agent = ctx.sub_agent_id
-        if _SAFE_ID.fullmatch(sub_agent) and sub_agent != PLATFORM_DIR:
+        if sub_agent is not None and not _SAFE_ID.fullmatch(sub_agent):
+            raise PromptNotFound(f"invalid sub-agent id: {sub_agent!r}")
+
+        candidates: list[tuple[PromptScope, Path]] = []
+        if sub_agent is not None and sub_agent.casefold() != PLATFORM_DIR:
             candidates.append(
                 (
                     PromptScope.PLATFORM_SUB_AGENT,
@@ -58,13 +61,25 @@ class FilePromptStore:
             (PromptScope.PLATFORM, self._root / PLATFORM_DIR / f"{name}{TEMPLATE_SUFFIX}")
         )
 
+        root = self._root.resolve()
         for scope, path in candidates:
-            if path.is_file():
-                raw = path.read_bytes()
-                return PromptVersion(
-                    name=name,
-                    version="sha256:" + hashlib.sha256(raw).hexdigest()[:12],
-                    template=raw.decode("utf-8"),
-                    scope=scope,
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root):
+                raise PromptNotFound(
+                    f"prompt path escapes the prompts root: {path!s}"
                 )
+            if not resolved.is_file():
+                continue
+            try:
+                template = resolved.read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
+            except UnicodeDecodeError as exc:
+                raise PromptNotFound(
+                    f"prompt template is not valid UTF-8: {name!r}"
+                ) from exc
+            return PromptVersion(
+                name=name,
+                version="sha256:" + hashlib.sha256(template.encode("utf-8")).hexdigest()[:16],
+                template=template,
+                scope=scope,
+            )
         raise PromptNotFound(f"no prompt template named {name!r} for sub-agent {sub_agent!r}")

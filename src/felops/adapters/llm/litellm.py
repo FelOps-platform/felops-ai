@@ -73,7 +73,7 @@ def _to_llm_error(exc: Exception) -> LLMError:
 
     The message carries only the exception type and status: LiteLLM exception
     text often embeds raw provider payloads (sometimes prompt content) and can
-    be huge. The full text is available at DEBUG level.
+    be huge.
     """
     if isinstance(exc, LLMError):
         return exc
@@ -81,11 +81,8 @@ def _to_llm_error(exc: Exception) -> LLMError:
     retryable = isinstance(exc, _RETRYABLE_ERRORS) or (
         isinstance(status, int) and (status >= 500 or status in _RETRYABLE_STATUS)
     )
-    logger.debug("llm vendor error detail: %s", exc)
     suffix = f" (status={status})" if isinstance(status, int) else ""
-    err = LLMError(f"{type(exc).__name__}{suffix}", retryable=retryable)
-    err.__cause__ = exc
-    return err
+    return LLMError(f"{type(exc).__name__}{suffix}", retryable=retryable)
 
 
 def _to_usage(usage: Any) -> TokenUsage:
@@ -138,11 +135,11 @@ def _build_tool_call(call_id: str, name: str, raw_args: Any) -> LLMToolCall:
     else:
         try:
             parsed = json.loads(raw_args)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError):
             # Broken JSON from the model is non-deterministic: a retry may succeed.
-            raise LLMError(f"malformed arguments for tool {name!r}", retryable=True) from exc
+            raise LLMError("malformed tool arguments", retryable=True) from None
         if not isinstance(parsed, dict):
-            raise LLMError(f"arguments for tool {name!r} are not an object", retryable=True)
+            raise LLMError("tool arguments must be an object", retryable=True)
         arguments = parsed
     return LLMToolCall(id=call_id, name=name, arguments=MappingProxyType(arguments))
 
@@ -324,7 +321,7 @@ class LiteLLMProvider:
             raise
         except Exception as exc:
             self._log_failure("llm call failed", kwargs, req)
-            raise _to_llm_error(exc) from exc
+            raise _to_llm_error(exc) from None
 
     async def stream(self, req: LLMRequest) -> AsyncIterator[LLMChunk]:
         kwargs = self._kwargs(req, stream=True)
@@ -364,7 +361,7 @@ class LiteLLMProvider:
             raise
         except Exception as exc:
             self._log_failure("llm stream failed", kwargs, req)
-            raise _to_llm_error(exc) from exc
+            raise _to_llm_error(exc) from None
         finally:
             # Runs on normal end, error and consumer cancellation/early break,
             # so the HTTP connection is released. Must never mask the original

@@ -60,6 +60,32 @@ def test_path_traversal_is_rejected(root: Path, bad: str) -> None:
     # a hostile sub_agent_id must not escape the root either
     with pytest.raises(PromptNotFound):
         FilePromptStore(root).resolve("secret", _ctx(sub_agent="../" + root.name))
+    # even when platform/secret.md exists, a hostile sub_agent_id is rejected
+    (root / "platform" / "secret.md").write_text("platform secret", encoding="utf-8")
+    with pytest.raises(PromptNotFound):
+        FilePromptStore(root).resolve("secret", _ctx(sub_agent="../platform"))
+
+
+@pytest.mark.parametrize("sub_agent", ["platform", "Platform"])
+def test_platform_sub_agent_id_resolves_platform_scope(root: Path, sub_agent: str) -> None:
+    (root / "Platform").mkdir(exist_ok=True)
+    (root / "Platform" / "responder.md").write_text("should not win", encoding="utf-8")
+    pv = FilePromptStore(root).resolve("responder", _ctx(sub_agent=sub_agent))
+    assert (pv.template, pv.scope) == ("platform responder", PromptScope.PLATFORM)
+
+
+def test_symlink_escape_outside_root_is_rejected(root: Path) -> None:
+    outside = root.parent / "outside.md"
+    outside.write_text("leak", encoding="utf-8")
+    (root / "platform" / "escape.md").symlink_to(outside)
+    with pytest.raises(PromptNotFound):
+        FilePromptStore(root).resolve("escape", _ctx())
+
+
+def test_invalid_utf8_file_raises_prompt_not_found(root: Path) -> None:
+    (root / "platform" / "bad_utf8.md").write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(PromptNotFound):
+        FilePromptStore(root).resolve("bad_utf8", _ctx())
 
 
 def test_workspace_never_selects_a_file(root: Path) -> None:
@@ -70,6 +96,7 @@ def test_workspace_never_selects_a_file(root: Path) -> None:
 def test_version_is_stable_and_follows_content(root: Path) -> None:
     store = FilePromptStore(root)
     v1 = store.resolve("responder", _ctx()).version
+    assert v1.startswith("sha256:")
     assert store.resolve("responder", _ctx()).version == v1
     (root / "platform" / "responder.md").write_text("edited", encoding="utf-8")
     assert store.resolve("responder", _ctx()).version != v1  # picked up with no restart

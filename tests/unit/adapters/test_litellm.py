@@ -91,8 +91,9 @@ def test_complete_maps_request_and_response(monkeypatch: pytest.MonkeyPatch) -> 
     seen = _patch(monkeypatch, _resp("hello"))
     tool = LLMToolSpec("lookup_order", "Look up an order", {"type": "object"})
     out = _complete(
-        _provider(api_key="k", api_base="http://x"),
+        _provider(api_key="k", api_base="http://x", timeout=12.5),
         _req(
+            temperature=0.0,
             max_tokens=50,
             json_mode=True,
             tools=(tool,),
@@ -102,6 +103,8 @@ def test_complete_maps_request_and_response(monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert seen["model"] == "groq/llama-3.3-70b-versatile"
     assert seen["messages"][0] == {"role": "system", "content": "be brief"}
+    assert seen["temperature"] == 0.0
+    assert seen["timeout"] == 12.5
     assert seen["stream"] is False
     assert seen["num_retries"] == 0 and seen["max_retries"] == 0  # retry is the gateway's job
     assert seen["max_tokens"] == 50
@@ -123,7 +126,10 @@ def test_complete_maps_request_and_response(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_optional_fields_are_omitted_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _patch(monkeypatch, _resp())
-    _complete(_provider(), _req())
+    req = _req()
+    _complete(_provider(), req)
+    assert seen["temperature"] == req.temperature
+    assert seen["timeout"] == 60.0
     for key in (
         "max_tokens",
         "response_format",
@@ -189,9 +195,23 @@ def test_tool_arguments_are_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
         args["order_id"] = "x"  # type: ignore[index]
 
 
-def test_empty_tool_arguments_become_empty_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch(monkeypatch, _resp(None, tool_calls=[_tc(args="")]))
+@pytest.mark.parametrize("raw_args", ["", None])
+def test_empty_tool_arguments_become_empty_mapping(
+    monkeypatch: pytest.MonkeyPatch, raw_args: Any
+) -> None:
+    _patch(monkeypatch, _resp(None, tool_calls=[_tc(args=raw_args)]))
     assert _complete(_provider(), _req()).tool_calls[0].arguments == {}
+
+
+def test_mapping_tool_arguments_become_read_only_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch(
+        monkeypatch,
+        _resp(None, finish="tool_calls", tool_calls=[_tc(args={"order_id": "1042"})]),
+    )
+    args = _complete(_provider(), _req()).tool_calls[0].arguments
+    assert args == {"order_id": "1042"}
+    with pytest.raises(TypeError):
+        args["order_id"] = "x"  # type: ignore[index]
 
 
 @pytest.mark.parametrize("bad_args", ["{not json", "[1, 2]", '"text"'])
@@ -204,7 +224,7 @@ def test_malformed_tool_arguments_are_retryable(
     assert ei.value.retryable is True
 
 
-@pytest.mark.parametrize("call", [_tc(id=""), _tc(name="")])
+@pytest.mark.parametrize("call", [_tc(id=""), _tc(name=""), NS(id="c1", function=None)])
 def test_incomplete_tool_call_is_retryable(monkeypatch: pytest.MonkeyPatch, call: NS) -> None:
     _patch(monkeypatch, _resp(None, tool_calls=[call]))
     with pytest.raises(LLMError) as ei:
@@ -224,6 +244,7 @@ def test_incomplete_tool_call_is_retryable(monkeypatch: pytest.MonkeyPatch, call
         ("length", True, "length"),  # never override a truncation
         ("content_filter", False, "error"),
         ("something_new", False, "error"),
+        (123, False, "error"),
         (None, False, "stop"),  # complete(): a missing reason means a normal end
     ],
 )
@@ -267,6 +288,38 @@ def test_model_falls_back_to_routed_id(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _complete(_provider(), _req()).model == "groq/llama-3.3-70b-versatile"
 
 
+def test_mapping_response_is_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch(
+        monkeypatch,
+        {
+            "model": "llama-3.3-70b-versatile",
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "content": "checking",
+                        "tool_calls": [
+                            {
+                                "id": "c1",
+                                "function": {
+                                    "name": "lookup_order",
+                                    "arguments": {"order_id": "1042"},
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 6},
+        },
+    )
+    out = _complete(_provider(), _req())
+    assert out.text == "checking"
+    assert out.finish_reason == "tool_calls"
+    assert out.usage.total_tokens == 10
+    assert out.tool_calls[0].arguments == {"order_id": "1042"}
+
+
 # -- error mapping --------------------------------------------------------
 
 
@@ -276,11 +329,15 @@ def test_model_falls_back_to_routed_id(monkeypatch: pytest.MonkeyPatch) -> None:
         (vendor.exceptions.RateLimitError("slow down", "groq", "m"), True),
         (vendor.exceptions.ServiceUnavailableError("down", "groq", "m"), True),
         (vendor.exceptions.APIConnectionError("reset", "groq", "m"), True),
+        (vendor.exceptions.Timeout("timed out", "m", "groq"), True),
+        (vendor.exceptions.InternalServerError("oops", "m", "groq"), True),
         (vendor.exceptions.AuthenticationError("bad key", "groq", "m"), False),
         (vendor.exceptions.BadRequestError("bad", "m", "groq"), False),
         (ValueError("anything else"), False),
         (type("E503", (Exception,), {"status_code": 503})("x"), True),
         (type("E429", (Exception,), {"status_code": 429})("x"), True),
+        (type("E408", (Exception,), {"status_code": 408})("x"), True),
+        (type("E409", (Exception,), {"status_code": 409})("x"), True),
         (type("E400", (Exception,), {"status_code": 400})("x"), False),
     ],
 )
@@ -291,7 +348,7 @@ def test_vendor_errors_become_llm_error(
     with pytest.raises(LLMError) as ei:
         _complete(_provider(), _req())
     assert ei.value.retryable is retryable
-    assert ei.value.__cause__ is exc
+    assert ei.value.__cause__ is None
 
 
 def test_error_message_does_not_leak_vendor_payload(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -499,3 +556,85 @@ def test_stream_early_exit_releases_the_connection(monkeypatch: pytest.MonkeyPat
 def test_failing_aclose_never_masks_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch(monkeypatch, _Stream([_chunk("a"), _chunk(None, finish="stop")], close_raises=True))
     assert _stream()[-1].finish_reason == "stop"
+
+
+def test_stream_mapping_chunks_and_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Stream(
+        [
+            {"choices": [{"delta": {"content": "Hi"}, "finish_reason": None}], "usage": None},
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "c1",
+                                    "function": {"name": "lookup", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3},
+            },
+        ]
+    )
+    _patch(monkeypatch, s)
+    chunks = _stream()
+    assert "".join(c.delta for c in chunks) == "Hi"
+    last = chunks[-1]
+    assert last.finish_reason == "tool_calls"
+    assert last.usage is not None and last.usage.total_tokens == 5
+    assert (last.tool_calls[0].id, last.tool_calls[0].name) == ("c1", "lookup")
+
+
+def test_stream_ignores_none_delta_and_none_function(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Stream(
+        [
+            NS(choices=[NS(finish_reason=None, delta=None)], usage=None),
+            _chunk(None, tool_calls=[NS(index=0, id="c1", function=None)]),
+            _chunk(None, tool_calls=[_delta(0, name="lookup", args="{}")]),
+            _chunk(None, finish="tool_calls"),
+        ]
+    )
+    _patch(monkeypatch, s)
+    last = _stream()[-1]
+    assert (last.tool_calls[0].id, last.tool_calls[0].name, dict(last.tool_calls[0].arguments)) == (
+        "c1",
+        "lookup",
+        {},
+    )
+
+
+def test_stream_sparse_and_non_int_tool_call_indices(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Stream(
+        [
+            _chunk(
+                None,
+                tool_calls=[
+                    _delta(2, id="a", name="one", args='{"x":'),
+                    _delta(5, id="b", name="two", args="{}"),
+                ],
+            ),
+            _chunk(None, tool_calls=[_delta(2, args=" 1}")]),
+            _chunk(
+                None,
+                tool_calls=[
+                    _delta("bad", id="c", name="three", args="{}"),
+                    _delta(True, id="d", name="four", args="{}"),
+                ],
+            ),
+            _chunk(None, finish="tool_calls"),
+        ]
+    )
+    _patch(monkeypatch, s)
+    calls = _stream()[-1].tool_calls
+    assert [(c.id, c.name, dict(c.arguments)) for c in calls] == [
+        ("a", "one", {"x": 1}),
+        ("b", "two", {}),
+        ("c", "three", {}),
+        ("d", "four", {}),
+    ]
