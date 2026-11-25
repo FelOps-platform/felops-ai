@@ -16,7 +16,8 @@ from __future__ import annotations
 import copy
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from functools import partial
 from typing import Any
 
 from pydantic import BaseModel, Field, ModelWrapValidatorHandler, field_validator, model_validator
@@ -76,16 +77,29 @@ class _FrozenList(list[Any]):
         return copied
 
 
+def _freeze_mapping(value: Mapping[Any, Any]) -> _FrozenDict:
+    """Recursively freeze values of a mapping into a ``_FrozenDict``."""
+    return _FrozenDict((k, _freeze_metadata_value(v)) for k, v in value.items())
+
+
+def _freeze_collection(factory: Callable[[Any], Any], value: Any) -> Any:
+    """Recursively freeze elements of an iterable using *factory*."""
+    return factory(_freeze_metadata_value(item) for item in value)
+
+
+_CONTAINER_FREEZERS: tuple[tuple[type[Any] | tuple[type[Any], ...], Callable[[Any], Any]], ...] = (
+    (Mapping, _freeze_mapping),
+    (list, partial(_freeze_collection, _FrozenList)),
+    (tuple, partial(_freeze_collection, tuple)),
+    ((set, frozenset), partial(_freeze_collection, frozenset)),
+)
+
+
 def _freeze_metadata_value(value: Any) -> Any:
     """Recursively deep-copy and freeze mutable containers in metadata."""
-    if isinstance(value, Mapping):
-        return _FrozenDict((k, _freeze_metadata_value(v)) for k, v in value.items())
-    if isinstance(value, list):
-        return _FrozenList(_freeze_metadata_value(item) for item in value)
-    if isinstance(value, tuple):
-        return tuple(_freeze_metadata_value(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_freeze_metadata_value(item) for item in value)
+    for container_type, freezer in _CONTAINER_FREEZERS:
+        if isinstance(value, container_type):
+            return freezer(value)
     return copy.deepcopy(value)
 
 

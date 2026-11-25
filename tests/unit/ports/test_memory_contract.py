@@ -82,6 +82,13 @@ def _item(item_id: str, content: str) -> MemoryItem:
     return MemoryItem(item_id=item_id, content=content)
 
 
+async def _read_scores_for_id(
+    store: MemoryStore, scope: MemoryScope, item_id: str
+) -> list[float]:
+    items = await store.read(scope, None)
+    return [item.score for item in items if item.item_id == item_id]
+
+
 # ---------------------------------------------------------------------------
 # Protocol structural conformance
 # ---------------------------------------------------------------------------
@@ -212,51 +219,35 @@ class TestMemoryStoreContract:
 
         assert [item.item_id for item in items] == ["ws-only"]
 
+    @pytest.mark.parametrize(
+        ("first_scope", "second_scope"),
+        [
+            pytest.param(_WS_LONG_TERM, _OTHER_WS_LONG_TERM, id="workspace"),
+            pytest.param(_AG1_LONG_TERM, _AG2_LONG_TERM, id="agent"),
+            pytest.param(_THREAD, _OTHER_THREAD, id="thread"),
+        ],
+    )
     @pytest.mark.asyncio
     async def test_same_derived_id_across_different_scopes_does_not_collide(
-        self, store: MemoryStore
+        self,
+        store: MemoryStore,
+        first_scope: MemoryScope,
+        second_scope: MemoryScope,
     ) -> None:
         """Composite (scope, item_id) upsert keeps identical derived ids isolated per scope."""
-        # Workspace boundary
-        ws_first = MemoryItem(content="ws boundary fact", metadata={"source": "chat"}, score=0.2)
-        ws_second = MemoryItem(content="ws boundary fact", metadata={"source": "chat"}, score=0.9)
-        assert ws_first.item_id == ws_second.item_id
-        await store.write(_WS_LONG_TERM, [ws_first])
-        await store.write(_OTHER_WS_LONG_TERM, [ws_second])
-        assert [item.score for item in await store.read(_WS_LONG_TERM, None)] == [0.2]
-        assert [item.score for item in await store.read(_OTHER_WS_LONG_TERM, None)] == [0.9]
+        content = (
+            f"boundary fact ({first_scope.workspace_id}, "
+            f"{first_scope.agent_id}, {first_scope.thread_id})"
+        )
+        first = MemoryItem(content=content, metadata={"source": "chat"}, score=0.2)
+        second = MemoryItem(content=content, metadata={"source": "chat"}, score=0.9)
+        assert first.item_id == second.item_id
 
-        # Agent boundary
-        ag_first = MemoryItem(content="agent boundary fact", metadata={"source": "chat"}, score=0.2)
-        ag_second = MemoryItem(
-            content="agent boundary fact", metadata={"source": "chat"}, score=0.9
-        )
-        assert ag_first.item_id == ag_second.item_id
-        await store.write(_AG1_LONG_TERM, [ag_first])
-        await store.write(_AG2_LONG_TERM, [ag_second])
-        assert [
-            item.score
-            for item in await store.read(_AG1_LONG_TERM, None)
-            if item.item_id == ag_first.item_id
-        ] == [0.2]
-        assert [
-            item.score
-            for item in await store.read(_AG2_LONG_TERM, None)
-            if item.item_id == ag_second.item_id
-        ] == [0.9]
+        await store.write(first_scope, [first])
+        await store.write(second_scope, [second])
 
-        # Thread boundary
-        th_first = MemoryItem(
-            content="thread boundary fact", metadata={"source": "chat"}, score=0.2
-        )
-        th_second = MemoryItem(
-            content="thread boundary fact", metadata={"source": "chat"}, score=0.9
-        )
-        assert th_first.item_id == th_second.item_id
-        await store.write(_THREAD, [th_first])
-        await store.write(_OTHER_THREAD, [th_second])
-        assert [item.score for item in await store.read(_THREAD, None)] == [0.2]
-        assert [item.score for item in await store.read(_OTHER_THREAD, None)] == [0.9]
+        assert await _read_scores_for_id(store, first_scope, first.item_id) == [0.2]
+        assert await _read_scores_for_id(store, second_scope, second.item_id) == [0.9]
 
     @pytest.mark.asyncio
     async def test_agent_write_with_same_derived_id_does_not_overwrite_workspace_item(
