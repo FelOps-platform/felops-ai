@@ -15,9 +15,11 @@ Contract summary (§2.3, §4, task 7.9):
 * Long-term memory is workspace-scoped: items written with ``agent_id=None``
   are readable from any agent in that workspace, while items written with a
   specific ``agent_id`` stay isolated to that agent.
-* ``write`` is an upsert by ``MemoryItem.item_id``; omitting ``item_id``
-  derives a deterministic id from normalized content and metadata so retried
-  identical writes collapse into one record.
+* ``write`` is an upsert by the composite ``(scope, MemoryItem.item_id)``;
+  omitting ``item_id`` derives a deterministic id from normalized content and
+  metadata so retried identical writes in the same scope collapse into one
+  record, while identical ``item_id``s across distinct scopes remain
+  independent.
 
 When the Postgres adapter lands (P4, task 4.8), it subclasses
 ``TestMemoryStoreContract`` and overrides the fixture so a scope leak fails CI.
@@ -196,3 +198,76 @@ class TestMemoryStoreContract:
         items = await store.read(_WS_LONG_TERM, None)
 
         assert len(items) == 1
+
+    @pytest.mark.asyncio
+    async def test_workspace_wide_read_excludes_agent_scoped_items(
+        self, store: MemoryStore
+    ) -> None:
+        ws_item = _item("ws-only", "shared workspace fact")
+        ag1_item = _item("ag1-only", "agent-1 private note")
+        await store.write(_WS_LONG_TERM, [ws_item])
+        await store.write(_AG1_LONG_TERM, [ag1_item])
+
+        items = await store.read(_WS_LONG_TERM, None)
+
+        assert [item.item_id for item in items] == ["ws-only"]
+
+    @pytest.mark.asyncio
+    async def test_same_derived_id_across_different_scopes_does_not_collide(
+        self, store: MemoryStore
+    ) -> None:
+        """Composite (scope, item_id) upsert keeps identical derived ids isolated per scope."""
+        # Workspace boundary
+        ws_first = MemoryItem(content="ws boundary fact", metadata={"source": "chat"}, score=0.2)
+        ws_second = MemoryItem(content="ws boundary fact", metadata={"source": "chat"}, score=0.9)
+        assert ws_first.item_id == ws_second.item_id
+        await store.write(_WS_LONG_TERM, [ws_first])
+        await store.write(_OTHER_WS_LONG_TERM, [ws_second])
+        assert [item.score for item in await store.read(_WS_LONG_TERM, None)] == [0.2]
+        assert [item.score for item in await store.read(_OTHER_WS_LONG_TERM, None)] == [0.9]
+
+        # Agent boundary
+        ag_first = MemoryItem(content="agent boundary fact", metadata={"source": "chat"}, score=0.2)
+        ag_second = MemoryItem(
+            content="agent boundary fact", metadata={"source": "chat"}, score=0.9
+        )
+        assert ag_first.item_id == ag_second.item_id
+        await store.write(_AG1_LONG_TERM, [ag_first])
+        await store.write(_AG2_LONG_TERM, [ag_second])
+        assert [
+            item.score
+            for item in await store.read(_AG1_LONG_TERM, None)
+            if item.item_id == ag_first.item_id
+        ] == [0.2]
+        assert [
+            item.score
+            for item in await store.read(_AG2_LONG_TERM, None)
+            if item.item_id == ag_second.item_id
+        ] == [0.9]
+
+        # Thread boundary
+        th_first = MemoryItem(
+            content="thread boundary fact", metadata={"source": "chat"}, score=0.2
+        )
+        th_second = MemoryItem(
+            content="thread boundary fact", metadata={"source": "chat"}, score=0.9
+        )
+        assert th_first.item_id == th_second.item_id
+        await store.write(_THREAD, [th_first])
+        await store.write(_OTHER_THREAD, [th_second])
+        assert [item.score for item in await store.read(_THREAD, None)] == [0.2]
+        assert [item.score for item in await store.read(_OTHER_THREAD, None)] == [0.9]
+
+    @pytest.mark.asyncio
+    async def test_agent_write_with_same_derived_id_does_not_overwrite_workspace_item(
+        self, store: MemoryStore
+    ) -> None:
+        ws_item = MemoryItem(content="prefers Arabic", score=0.1)
+        ag1_item = MemoryItem(content="prefers Arabic", score=0.9)
+        assert ws_item.item_id == ag1_item.item_id
+
+        await store.write(_WS_LONG_TERM, [ws_item])
+        await store.write(_AG1_LONG_TERM, [ag1_item])
+
+        assert await store.read(_WS_LONG_TERM, None) == [ws_item]
+        assert await store.read(_AG2_LONG_TERM, None) == [ws_item]

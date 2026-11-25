@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from felops.domain.agent import HandoffReason
 from felops.domain.state import (
+    STATE_TYPES,
     AgentConfig,
     AgentInstructions,
     AgentState,
@@ -18,7 +19,6 @@ from felops.domain.state import (
     Chunk,
     Plan,
     PlanStep,
-    SideEffectClass,
     ToolCall,
     TraceEvent,
 )
@@ -102,57 +102,34 @@ class TestChunk:
             c.content = "y"  # type: ignore[misc]
 
 
-# SideEffectClass
-
-
-class TestSideEffectClass:
-    def test_values(self):
-        assert SideEffectClass.READ_ONLY == "read_only"
-        assert SideEffectClass.SIDE_EFFECTING == "side_effecting"
-
-    def test_is_str(self):
-        assert isinstance(SideEffectClass.READ_ONLY, str)
-
-
 # ToolCall
 
 
 class TestToolCall:
     def test_defaults(self):
-        tc = ToolCall(tool_id="tool-1", tool_name="shopify_lookup")
+        tc = ToolCall(tool_id="tool-1", tool_name="shopify_lookup", idem_key="idem-1")
         assert tc.tool_id == "tool-1"
         assert tc.tool_name == "shopify_lookup"
         assert tc.arguments == {}
         assert tc.params_hash is None
-        assert tc.side_effect_class == SideEffectClass.READ_ONLY
-        assert tc.idem_key is None
+        assert tc.idem_key == "idem-1"
         assert tc.outcome is None
 
     def test_call_id_auto_generated(self):
-        a = ToolCall(tool_id="a", tool_name="t")
-        b = ToolCall(tool_id="a", tool_name="t")
+        a = ToolCall(tool_id="a", tool_name="t", idem_key="idem-a")
+        b = ToolCall(tool_id="a", tool_name="t", idem_key="idem-b")
         assert a.call_id != b.call_id
 
-    def test_side_effecting_with_idem_key(self):
-        tc = ToolCall(
-            tool_id="tool-2",
-            tool_name="quickbooks_send",
-            side_effect_class=SideEffectClass.SIDE_EFFECTING,
-            idem_key="idem-abc123",
-        )
-        assert tc.side_effect_class == SideEffectClass.SIDE_EFFECTING
-        assert tc.idem_key == "idem-abc123"
+    def test_idem_key_is_required(self):
+        with pytest.raises(ValidationError):
+            ToolCall(tool_id="tool-1", tool_name="shopify_lookup")  # type: ignore[call-arg]
 
-    def test_read_only_with_idem_key_allowed(self):
-        """V2 contract requires/allows idempotency key on read-only tool calls."""
-        tc = ToolCall(
-            tool_id="tool-1",
-            tool_name="shopify_lookup",
-            side_effect_class=SideEffectClass.READ_ONLY,
-            idem_key="idem-read-123",
-        )
-        assert tc.side_effect_class == SideEffectClass.READ_ONLY
-        assert tc.idem_key == "idem-read-123"
+    def test_idem_key_rejects_none(self):
+        with pytest.raises(ValidationError):
+            ToolCall(tool_id="tool-1", tool_name="shopify_lookup", idem_key=None)  # type: ignore[arg-type]
+
+    def test_no_side_effect_class_field(self):
+        assert "side_effect_class" not in ToolCall.model_fields
 
     def test_tool_call_supports_tool_id_and_connector_id(self):
         tc = ToolCall(
@@ -164,11 +141,17 @@ class TestToolCall:
         assert tc.tool_id == "vondera__get_product"
         assert tc.connector_id == "vondera"
         assert tc.arguments == {"productId": "prod_123"}
+        assert tc.idem_key == "idem-123"
 
     def test_mutable(self):
-        tc = ToolCall(tool_id="a", tool_name="t")
+        tc = ToolCall(tool_id="a", tool_name="t", idem_key="idem-1")
         tc.outcome = {"status": "ok"}
         assert tc.outcome == {"status": "ok"}
+
+    def test_state_types_allowlist(self):
+        assert ToolCall in STATE_TYPES
+        assert len(STATE_TYPES) == 11
+        assert all(t.__name__ != "SideEffectClass" for t in STATE_TYPES)
 
 
 # ApprovalStatus

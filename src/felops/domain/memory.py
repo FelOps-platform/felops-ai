@@ -13,8 +13,10 @@ partition key for reads and writes:
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field, ModelWrapValidatorHandler, field_validator, model_validator
@@ -22,7 +24,72 @@ from pydantic import BaseModel, Field, ModelWrapValidatorHandler, field_validato
 _MEMORY_ITEM_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "felops.memory.item")
 
 
-def _derive_item_id(content: str, metadata: dict[str, Any]) -> str:
+def _immutable_metadata_error(*_args: Any, **_kwargs: Any) -> Any:
+    raise TypeError("MemoryItem.metadata is immutable")
+
+
+class _FrozenDict(dict[str, Any]):
+    """Immutable dict subclass for ``MemoryItem.metadata``."""
+
+    __setitem__ = _immutable_metadata_error
+    __delitem__ = _immutable_metadata_error
+    clear = _immutable_metadata_error
+    pop = _immutable_metadata_error
+    popitem = _immutable_metadata_error
+    setdefault = _immutable_metadata_error
+    update = _immutable_metadata_error
+    __ior__ = _immutable_metadata_error
+
+    def __reduce__(self) -> tuple[type[_FrozenDict], tuple[list[tuple[str, Any]]]]:
+        return (_FrozenDict, (list(self.items()),))
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _FrozenDict:
+        copied = _FrozenDict(
+            (copy.deepcopy(k, memo), copy.deepcopy(v, memo)) for k, v in self.items()
+        )
+        memo[id(self)] = copied
+        return copied
+
+
+class _FrozenList(list[Any]):
+    """Immutable list subclass for nested lists inside ``MemoryItem.metadata``."""
+
+    __setitem__ = _immutable_metadata_error
+    __delitem__ = _immutable_metadata_error
+    append = _immutable_metadata_error
+    clear = _immutable_metadata_error
+    extend = _immutable_metadata_error
+    insert = _immutable_metadata_error
+    pop = _immutable_metadata_error
+    remove = _immutable_metadata_error
+    reverse = _immutable_metadata_error
+    sort = _immutable_metadata_error
+    __iadd__ = _immutable_metadata_error
+    __imul__ = _immutable_metadata_error
+
+    def __reduce__(self) -> tuple[type[_FrozenList], tuple[list[Any]]]:
+        return (_FrozenList, (list(self),))
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _FrozenList:
+        copied = _FrozenList(copy.deepcopy(item, memo) for item in self)
+        memo[id(self)] = copied
+        return copied
+
+
+def _freeze_metadata_value(value: Any) -> Any:
+    """Recursively deep-copy and freeze mutable containers in metadata."""
+    if isinstance(value, Mapping):
+        return _FrozenDict((k, _freeze_metadata_value(v)) for k, v in value.items())
+    if isinstance(value, list):
+        return _FrozenList(_freeze_metadata_value(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_metadata_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_metadata_value(item) for item in value)
+    return copy.deepcopy(value)
+
+
+def _derive_item_id(content: str, metadata: Mapping[str, Any]) -> str:
     """Derive a deterministic UUIDv5 from normalized content and metadata.
 
     Whitespace is collapsed and content is casefolded; metadata keys are sorted
@@ -63,7 +130,14 @@ class MemoryScope(BaseModel, frozen=True):
 class MemoryItem(BaseModel, frozen=True):
     """One stored memory item.
 
-    ``item_id`` is the upsert key for ``MemoryStore.write``.
+    The upsert key for ``MemoryStore.write`` is the composite
+    ``(scope, item_id)`` — the same ``item_id`` (whether explicit or derived)
+    written under two different ``MemoryScope``s stores two independent records
+    without colliding.
+
+    ``metadata`` is recursively deep-copied and frozen on construction so
+    neither caller-side mutations nor post-construction ``item.metadata[...]``
+    mutations can alter stored metadata or desync a derived ``item_id``.
 
     Deduplication semantics:
 
@@ -77,9 +151,9 @@ class MemoryItem(BaseModel, frozen=True):
       derived id and gives replace-in-place semantics on update.
     """
 
-    item_id: str = Field(min_length=1)
+    item_id: str = Field(default_factory=str, min_length=1)
     content: str = Field(min_length=1)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: Mapping[str, Any] = Field(default_factory=_FrozenDict)
     score: float = 0.0
 
     @field_validator("content")
@@ -88,6 +162,11 @@ class MemoryItem(BaseModel, frozen=True):
         if not value.strip():
             raise ValueError("content must not be blank")
         return value
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _freeze_metadata(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return _freeze_metadata_value(value)
 
     @model_validator(mode="wrap")
     @classmethod

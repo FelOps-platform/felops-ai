@@ -6,7 +6,12 @@ The MemoryStore port (§5.1) is scoped by ``MemoryScope`` and moves
 
 from __future__ import annotations
 
+import copy
+import json
+import warnings
+
 import pytest
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from pydantic import ValidationError
 
 from felops.domain.memory import MemoryItem, MemoryScope
@@ -90,3 +95,105 @@ def test_memory_item_explicit_id_wins_over_derived_id() -> None:
 
     assert explicit.item_id == "customer:123:language"
     assert explicit.item_id != derived.item_id
+
+
+def test_memory_item_model_json_schema_does_not_require_item_id() -> None:
+    schema = MemoryItem.model_json_schema()
+
+    assert "item_id" not in schema.get("required", [])
+    assert "content" in schema["required"]
+    assert MemoryItem.model_fields["item_id"].is_required() is False
+
+
+def test_memory_item_validates_from_dict_and_json_without_item_id() -> None:
+    from_dict = MemoryItem.model_validate({"content": "prefers Arabic"})
+    from_json = MemoryItem.model_validate_json('{"content": "prefers Arabic"}')
+    direct = MemoryItem(content="prefers Arabic")
+
+    assert from_dict.item_id == from_json.item_id == direct.item_id
+    assert (
+        MemoryItem.model_validate(
+            MemoryItem(item_id="explicit:1", content="prefers Arabic")
+        ).item_id
+        == "explicit:1"
+    )
+    with pytest.raises(ValidationError):
+        MemoryItem.model_validate({"item_id": None, "content": "prefers Arabic"})
+
+
+def test_memory_item_deep_copies_caller_metadata_and_resists_caller_mutation() -> None:
+    raw: dict[str, object] = {"nested": {"k": "v"}, "tags": ["a", {"b": 1}]}
+    item = MemoryItem(content="prefers Arabic", metadata=raw)
+
+    raw["extra"] = 1
+    assert isinstance(raw["nested"], dict)
+    raw["nested"]["k"] = "mutated"
+    assert isinstance(raw["tags"], list)
+    raw["tags"].append("mutated")
+    assert isinstance(raw["tags"][1], dict)
+    raw["tags"][1]["b"] = 99
+
+    expected = {"nested": {"k": "v"}, "tags": ["a", {"b": 1}]}
+    assert item.metadata == expected
+    assert item.item_id == MemoryItem(content="prefers Arabic", metadata=expected).item_id
+
+
+def test_memory_item_metadata_is_immutable_after_construction() -> None:
+    item = MemoryItem(
+        content="prefers Arabic",
+        metadata={"nested": {"k": "v"}, "tags": ["a", {"b": 1}]},
+    )
+    default_item = MemoryItem(content="prefers Arabic")
+
+    with pytest.raises(TypeError):
+        default_item.metadata["x"] = 1  # type: ignore[index]
+    with pytest.raises(TypeError):
+        item.metadata["x"] = 1  # type: ignore[index]
+    with pytest.raises(TypeError):
+        item.metadata.update({"x": 1})  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        item.metadata.pop("nested")  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        del item.metadata["nested"]  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        item.metadata["nested"]["k"] = "mutated"
+    with pytest.raises(TypeError):
+        item.metadata["tags"].append("b")
+    with pytest.raises(TypeError):
+        item.metadata["tags"][0] = "b"
+    with pytest.raises(TypeError):
+        item.metadata["tags"][1]["b"] = 99
+
+
+def test_memory_item_serialization_and_deepcopy_with_frozen_metadata() -> None:
+    item = MemoryItem(
+        content="prefers Arabic",
+        metadata={"b": 2, "a": {"k": "v"}, "tags": ["x", "y"]},
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        dumped = item.model_dump()
+    assert caught == []
+    assert type(dumped["metadata"]) is dict
+    assert type(dumped["metadata"]["a"]) is dict
+    assert type(dumped["metadata"]["tags"]) is list
+
+    assert MemoryItem.model_validate_json(item.model_dump_json()) == item
+
+    reordered = {"a": {"k": "v"}, "tags": ["x", "y"], "b": 2}
+    assert json.dumps(item.metadata, sort_keys=True, default=str) == json.dumps(
+        reordered, sort_keys=True, default=str
+    )
+
+    deep_copied = copy.deepcopy(item)
+    model_copied = item.model_copy(deep=True)
+    assert deep_copied == item
+    assert model_copied == item
+    with pytest.raises(TypeError):
+        deep_copied.metadata["b"] = 99  # type: ignore[index]
+    with pytest.raises(TypeError):
+        model_copied.metadata["a"]["k"] = "mutated"
+
+    serde = JsonPlusSerializer(allowed_msgpack_modules=[MemoryItem])
+    assert serde.loads_typed(serde.dumps_typed(item)) == item
