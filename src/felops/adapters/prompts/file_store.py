@@ -37,49 +37,66 @@ TEMPLATE_SUFFIX = ".md"
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+def _validate_id(value: str, label: str) -> None:
+    if not _SAFE_ID.fullmatch(value):
+        raise PromptNotFound(f"invalid {label}: {value!r}")
+
+
+def _candidate_paths(
+    root: Path, name: str, sub_agent: str | None
+) -> list[tuple[PromptScope, Path]]:
+    candidates: list[tuple[PromptScope, Path]] = []
+    if sub_agent is not None and sub_agent.casefold() != PLATFORM_DIR:
+        candidates.append(
+            (
+                PromptScope.PLATFORM_SUB_AGENT,
+                root / sub_agent / f"{name}{TEMPLATE_SUFFIX}",
+            )
+        )
+    candidates.append(
+        (PromptScope.PLATFORM, root / PLATFORM_DIR / f"{name}{TEMPLATE_SUFFIX}")
+    )
+    return candidates
+
+
+def _read_template(path: Path, root: Path, name: str) -> str | None:
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root):
+        raise PromptNotFound(f"prompt path escapes the prompts root: {path!s}")
+    if not resolved.is_file():
+        return None
+    try:
+        return resolved.read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
+    except (UnicodeDecodeError, OSError) as exc:
+        raise PromptNotFound(
+            f"prompt template is not valid UTF-8: {name!r}"
+        ) from exc
+
+
+def _build_version(name: str, template: str, scope: PromptScope) -> PromptVersion:
+    digest = hashlib.sha256(template.encode("utf-8")).hexdigest()[:16]
+    return PromptVersion(
+        name=name,
+        version="sha256:" + digest,
+        template=template,
+        scope=scope,
+    )
+
+
 class FilePromptStore:
     def __init__(self, root: str | Path) -> None:
         self._root = Path(root)
 
     def resolve(self, name: str, ctx: PromptContext) -> PromptVersion:
-        if not _SAFE_ID.fullmatch(name):
-            raise PromptNotFound(f"invalid prompt name: {name!r}")
+        _validate_id(name, "prompt name")
 
         sub_agent = ctx.sub_agent_id
-        if sub_agent is not None and not _SAFE_ID.fullmatch(sub_agent):
-            raise PromptNotFound(f"invalid sub-agent id: {sub_agent!r}")
-
-        candidates: list[tuple[PromptScope, Path]] = []
-        if sub_agent is not None and sub_agent.casefold() != PLATFORM_DIR:
-            candidates.append(
-                (
-                    PromptScope.PLATFORM_SUB_AGENT,
-                    self._root / sub_agent / f"{name}{TEMPLATE_SUFFIX}",
-                )
-            )
-        candidates.append(
-            (PromptScope.PLATFORM, self._root / PLATFORM_DIR / f"{name}{TEMPLATE_SUFFIX}")
-        )
+        if sub_agent is not None:
+            _validate_id(sub_agent, "sub-agent id")
 
         root = self._root.resolve()
-        for scope, path in candidates:
-            resolved = path.resolve()
-            if not resolved.is_relative_to(root):
-                raise PromptNotFound(
-                    f"prompt path escapes the prompts root: {path!s}"
-                )
-            if not resolved.is_file():
-                continue
-            try:
-                template = resolved.read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
-            except UnicodeDecodeError as exc:
-                raise PromptNotFound(
-                    f"prompt template is not valid UTF-8: {name!r}"
-                ) from exc
-            return PromptVersion(
-                name=name,
-                version="sha256:" + hashlib.sha256(template.encode("utf-8")).hexdigest()[:16],
-                template=template,
-                scope=scope,
-            )
+        for scope, path in _candidate_paths(root, name, sub_agent):
+            template = _read_template(path, root, name)
+            if template is not None:
+                return _build_version(name, template, scope)
         raise PromptNotFound(f"no prompt template named {name!r} for sub-agent {sub_agent!r}")

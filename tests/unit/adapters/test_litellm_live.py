@@ -39,31 +39,50 @@ from felops.ports.prompts import PromptContext
 _ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
+def _unquote_env_value(val: str) -> str | None:
+    if len(val) < 2 or val[0] not in ('"', "'"):
+        return None
+    end = val.find(val[0], 1)
+    if end == -1:
+        return None
+    trailing = val[end + 1 :].strip()
+    if trailing and not trailing.startswith("#"):
+        return None
+    return val[1:end]
+
+
 def _parse_env_value(raw: str) -> str:
     val = raw.strip()
-    if len(val) >= 2 and val[0] in ('"', "'"):
-        quote = val[0]
-        end = val.find(quote, 1)
-        if end != -1:
-            trailing = val[end + 1 :].strip()
-            if not trailing or trailing.startswith("#"):
-                return val[1:end]
+    unquoted = _unquote_env_value(val)
+    if unquoted is not None:
+        return unquoted
     return val.split("#", 1)[0].strip()
+
+
+def _strip_export_prefix(line: str) -> str:
+    if line.startswith("export") and len(line) > 6 and line[6].isspace():
+        return line[6:].lstrip()
+    return line
+
+
+def _parse_env_line(raw: str) -> tuple[str, str] | None:
+    line = raw.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        return None
+    key, _, value = _strip_export_prefix(line).partition("=")
+    key, value = key.strip(), _parse_env_value(value)
+    if not key or not value:
+        return None
+    return key, value
 
 
 def _load_env_file(path: Path) -> None:
     if not path.is_file():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        if line.startswith("export") and len(line) > 6 and line[6].isspace():
-            line = line[6:].lstrip()
-        key, _, value = line.partition("=")
-        key, value = key.strip(), _parse_env_value(value)
-        if key and value:
-            os.environ.setdefault(key, value)
+        parsed = _parse_env_line(raw)
+        if parsed is not None:
+            os.environ.setdefault(*parsed)
 
 
 _load_env_file(_ENV_FILE)

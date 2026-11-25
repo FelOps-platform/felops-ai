@@ -128,6 +128,11 @@ def _build_tool_call(call_id: str, name: str, raw_args: Any) -> LLMToolCall:
     if not call_id or not name:
         # A call without id/name cannot be answered with a role="tool" message.
         raise LLMError("incomplete tool call from provider", retryable=True)
+    arguments = _parse_tool_arguments(raw_args)
+    return LLMToolCall(id=call_id, name=name, arguments=MappingProxyType(arguments))
+
+
+def _parse_tool_arguments(raw_args: Any) -> dict[str, Any]:
     if raw_args is None or raw_args == "":
         arguments: dict[str, Any] = {}
     elif isinstance(raw_args, Mapping):
@@ -141,7 +146,40 @@ def _build_tool_call(call_id: str, name: str, raw_args: Any) -> LLMToolCall:
         if not isinstance(parsed, dict):
             raise LLMError("tool arguments must be an object", retryable=True)
         arguments = parsed
-    return LLMToolCall(id=call_id, name=name, arguments=MappingProxyType(arguments))
+    return arguments
+
+
+def _delta_index(delta: Any, position: int) -> int:
+    index = _get(delta, "index")
+    return index if isinstance(index, int) and not isinstance(index, bool) else position
+
+
+def _validate_provider_config(
+    provider: str, capabilities: ProviderCaps, default_model: str | None, timeout: float
+) -> None:
+    if not provider or not provider.strip():
+        raise ValueError("provider must not be empty")
+    if default_model is not None and not default_model.strip():
+        raise ValueError("default_model must not be blank")
+    if capabilities.max_ctx <= 0:
+        raise ValueError("capabilities.max_ctx must be positive")
+    if timeout <= 0:
+        raise ValueError("timeout must be positive")
+
+
+def _request_option_kwargs(req: LLMRequest) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    if req.max_tokens is not None:
+        kwargs["max_tokens"] = req.max_tokens
+    if req.json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    if req.tools:
+        kwargs["tools"] = [_tool_to_dict(t) for t in req.tools]
+    if req.stop:
+        kwargs["stop"] = list(req.stop)
+    if req.metadata:
+        kwargs["metadata"] = dict(req.metadata)
+    return kwargs
 
 
 def _message_to_dict(m: LLMMessage) -> dict[str, Any]:
@@ -180,6 +218,48 @@ class _Slot:
     args: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class _StreamState:
+    calls: _ToolCallAccumulator = field(default_factory=lambda: _ToolCallAccumulator())
+    finish_raw: Any = None
+    usage: TokenUsage | None = None
+
+
+def _process_chunk(chunk: Any, state: _StreamState) -> str | None:
+    chunk_usage = _get(chunk, "usage")
+    if chunk_usage is not None:
+        state.usage = _to_usage(chunk_usage)
+    choices = _get(chunk, "choices") or []
+    if not choices:
+        return None
+    choice = choices[0]
+    delta = _get(choice, "delta")
+    state.calls.add(_get(delta, "tool_calls"))
+    text = _text_of(_get(delta, "content"))
+    reason = _get(choice, "finish_reason")
+    if reason:
+        state.finish_raw = reason
+    return text or None
+
+
+def _terminal_chunk(state: _StreamState) -> LLMChunk:
+    tool_calls = state.calls.build()
+    return LLMChunk(
+        finish_reason=_resolve_finish(
+            state.finish_raw, has_tool_calls=bool(tool_calls), missing="error"
+        ),
+        tool_calls=tool_calls,
+        usage=state.usage,
+    )
+
+
+async def _close_stream(upstream: Any) -> None:
+    aclose = getattr(upstream, "aclose", None)
+    if aclose is not None:
+        with contextlib.suppress(Exception):
+            await aclose()
+
+
 class _ToolCallAccumulator:
     """Rebuilds tool calls from streamed deltas.
 
@@ -198,19 +278,24 @@ class _ToolCallAccumulator:
         if not deltas:
             return
         for position, delta in enumerate(deltas):
-            index = _get(delta, "index")
-            if not isinstance(index, int) or isinstance(index, bool):
-                index = position
+            index = _delta_index(delta, position)
             call_id = _get(delta, "id") or ""
-            function = _get(delta, "function")
-            slot = self._by_index.get(index)
-            if slot is None or (call_id and slot.id and call_id != slot.id):
-                slot = _Slot()
-                self._slots.append(slot)
-                self._by_index[index] = slot
-            slot.id = slot.id or call_id
-            slot.name = slot.name or (_get(function, "name") or "")
-            slot.args.append(_get(function, "arguments") or "")
+            self._apply_delta(self._get_or_create_slot(index, call_id), delta, call_id)
+
+    def _get_or_create_slot(self, index: int, call_id: str) -> _Slot:
+        slot = self._by_index.get(index)
+        if slot is None or (call_id and slot.id and call_id != slot.id):
+            slot = _Slot()
+            self._slots.append(slot)
+            self._by_index[index] = slot
+        return slot
+
+    @staticmethod
+    def _apply_delta(slot: _Slot, delta: Any, call_id: str) -> None:
+        function = _get(delta, "function")
+        slot.id = slot.id or call_id
+        slot.name = slot.name or (_get(function, "name") or "")
+        slot.args.append(_get(function, "arguments") or "")
 
     def build(self) -> tuple[LLMToolCall, ...]:
         return tuple(_build_tool_call(s.id, s.name, "".join(s.args)) for s in self._slots)
@@ -239,19 +324,17 @@ class LiteLLMProvider:
         *,
         provider: str,
         capabilities: ProviderCaps,
-        default_model: str | None = None,
-        api_key: str | None = None,
-        api_base: str | None = None,
-        timeout: float = 60.0,
+        **options: Any,
     ) -> None:
-        if not provider or not provider.strip():
-            raise ValueError("provider must not be empty")
-        if default_model is not None and not default_model.strip():
-            raise ValueError("default_model must not be blank")
-        if capabilities.max_ctx <= 0:
-            raise ValueError("capabilities.max_ctx must be positive")
-        if timeout <= 0:
-            raise ValueError("timeout must be positive")
+        unknown = options.keys() - {"default_model", "api_key", "api_base", "timeout"}
+        if unknown:
+            name = sorted(unknown)[0]
+            raise TypeError(f"unexpected keyword argument: {name!r}")
+        default_model = options.get("default_model")
+        api_key = options.get("api_key")
+        api_base = options.get("api_base")
+        timeout = options.get("timeout", 60.0)
+        _validate_provider_config(provider, capabilities, default_model, timeout)
         self.provider = provider.strip()
         self.capabilities = capabilities
         self._default_model = default_model
@@ -281,18 +364,12 @@ class LiteLLMProvider:
             "max_retries": 0,
             "stream": stream,
         }
-        if req.max_tokens is not None:
-            kwargs["max_tokens"] = req.max_tokens
-        if req.json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        if req.tools:
-            kwargs["tools"] = [_tool_to_dict(t) for t in req.tools]
-        if req.stop:
-            kwargs["stop"] = list(req.stop)
-        if req.metadata:
-            # Trace baggage only: forwarded to LiteLLM callbacks, never used
-            # for behaviour.
-            kwargs["metadata"] = dict(req.metadata)
+        kwargs.update(_request_option_kwargs(req))
+        kwargs.update(self._provider_option_kwargs(stream=stream))
+        return kwargs
+
+    def _provider_option_kwargs(self, *, stream: bool) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
         if self._api_key:
             kwargs["api_key"] = self._api_key
         if self._api_base:
@@ -325,38 +402,17 @@ class LiteLLMProvider:
 
     async def stream(self, req: LLMRequest) -> AsyncIterator[LLMChunk]:
         kwargs = self._kwargs(req, stream=True)
-        finish_raw: Any = None
-        usage: TokenUsage | None = None
-        calls = _ToolCallAccumulator()
+        state = _StreamState()
         upstream: Any = None
         try:
             upstream = await litellm.acompletion(**kwargs)
             async for chunk in upstream:
-                chunk_usage = _get(chunk, "usage")
-                if chunk_usage is not None:
-                    usage = _to_usage(chunk_usage)
-                choices = _get(chunk, "choices") or []
-                if not choices:
-                    continue  # e.g. the usage-only final chunk
-                choice = choices[0]
-                delta = _get(choice, "delta")
-                calls.add(_get(delta, "tool_calls"))
-                text = _text_of(_get(delta, "content"))
+                text = _process_chunk(chunk, state)
                 if text:
                     yield LLMChunk(delta=text)
-                reason = _get(choice, "finish_reason")
-                if reason:
-                    finish_raw = reason
-            tool_calls = calls.build()
             # Exactly one terminal chunk. A stream that ended without a finish
             # reason was cut short, so it is reported as "error", not "stop".
-            yield LLMChunk(
-                finish_reason=_resolve_finish(
-                    finish_raw, has_tool_calls=bool(tool_calls), missing="error"
-                ),
-                tool_calls=tool_calls,
-                usage=usage,
-            )
+            yield _terminal_chunk(state)
         except LLMError:
             raise
         except Exception as exc:
@@ -366,10 +422,7 @@ class LiteLLMProvider:
             # Runs on normal end, error and consumer cancellation/early break,
             # so the HTTP connection is released. Must never mask the original
             # exception.
-            aclose = getattr(upstream, "aclose", None)
-            if aclose is not None:
-                with contextlib.suppress(Exception):
-                    await aclose()
+            await _close_stream(upstream)
 
     # -- response parsing --------------------------------------------------
 
@@ -380,18 +433,10 @@ class LiteLLMProvider:
             raise LLMError("provider returned no choices", retryable=True)
         choice = choices[0]
         message = _get(choice, "message")
-        tool_calls = tuple(
-            _build_tool_call(
-                _get(tc, "id") or "",
-                _get(_get(tc, "function"), "name") or "",
-                _get(_get(tc, "function"), "arguments"),
-            )
-            for tc in _get(message, "tool_calls") or []
-        )
-        model = _get(resp, "model")
+        tool_calls = _parse_tool_calls(message)
         return LLMResponse(
             text=_text_of(_get(message, "content")),
-            model=model if isinstance(model, str) and model else routed_model,
+            model=_pick_model(resp, routed_model),
             finish_reason=_resolve_finish(
                 _get(choice, "finish_reason"),
                 has_tool_calls=bool(tool_calls),
@@ -400,3 +445,19 @@ class LiteLLMProvider:
             tool_calls=tool_calls,
             usage=_to_usage(_get(resp, "usage")),
         )
+
+
+def _parse_tool_calls(message: Any) -> tuple[LLMToolCall, ...]:
+    return tuple(
+            _build_tool_call(
+                _get(tc, "id") or "",
+                _get(_get(tc, "function"), "name") or "",
+                _get(_get(tc, "function"), "arguments"),
+            )
+            for tc in _get(message, "tool_calls") or []
+        )
+
+
+def _pick_model(resp: Any, routed_model: str) -> str:
+    model = _get(resp, "model")
+    return model if isinstance(model, str) and model else routed_model
