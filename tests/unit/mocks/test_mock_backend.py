@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from mocks.mock_backend.app import create_app
+from mocks.mock_backend.app import MockBackendConfig, create_app
 
 from felops.domain.state import AgentConfig
 
@@ -57,7 +57,7 @@ _CATALOG_FIELDS = {
 
 @pytest.fixture()
 def client() -> Iterator[TestClient]:
-    with TestClient(create_app(ai_identity_token=_TEST_AI_TOKEN)) as test_client:
+    with TestClient(create_app(MockBackendConfig(ai_identity_token=_TEST_AI_TOKEN))) as test_client:
         yield test_client
 
 
@@ -84,7 +84,7 @@ def test_token_endpoint_does_not_exist(client: TestClient) -> None:
 
 
 def test_ai_identity_token_enforced_when_configured() -> None:
-    app = create_app(ai_identity_token="secret-ai-token")
+    app = create_app(MockBackendConfig(ai_identity_token="secret-ai-token"))
     with TestClient(app) as authed_client:
         assert authed_client.get("/catalog").status_code == 401
         assert authed_client.get("/catalog").headers["www-authenticate"] == "Bearer"
@@ -156,10 +156,12 @@ def test_push_catalog_sends_tools_snapshot_to_ai_service() -> None:
         return {"applied": True}
 
     app = create_app(
-        ai_identity_token=_TEST_AI_TOKEN,
-        backend_identity_token="secret-backend-token",
-        ai_service_url="http://ai-service:8000",
-        push_handler=fake_push,
+        MockBackendConfig(
+            ai_identity_token=_TEST_AI_TOKEN,
+            backend_identity_token="secret-backend-token",
+            ai_service_url="http://ai-service:8000",
+            push_handler=fake_push,
+        )
     )
     with TestClient(app) as push_client:
         response = push_client.post("/catalog/push")
@@ -372,13 +374,13 @@ def test_ai_identity_token_empty_or_whitespace_fails_closed(
     monkeypatch: pytest.MonkeyPatch, token: str
 ) -> None:
     monkeypatch.setenv("AI_IDENTITY_TOKEN", token)
-    with TestClient(create_app(ai_identity_token=token)) as test_client:
+    with TestClient(create_app(MockBackendConfig(ai_identity_token=token))) as test_client:
         assert test_client.get("/catalog").status_code == 500
         assert test_client.post("/webhooks/ai", json=_webhook_event()).status_code == 500
 
 
 def test_ai_identity_token_empty_bearer_returns_401() -> None:
-    with TestClient(create_app(ai_identity_token=_TEST_AI_TOKEN)) as test_client:
+    with TestClient(create_app(MockBackendConfig(ai_identity_token=_TEST_AI_TOKEN))) as test_client:
         headers = {"Authorization": "Bearer "}
         assert test_client.get("/catalog", headers=headers).status_code == 401
         response = test_client.post("/webhooks/ai", json=_webhook_event(), headers=headers)
@@ -407,7 +409,7 @@ def test_get_catalog_preserves_deprecated_true_flag(tmp_path: Path) -> None:
     catalog = tmp_path / "catalog.json"
     catalog.write_text(json.dumps({"tools": [tool]}), encoding="utf-8")
     with TestClient(
-        create_app(catalog_path=catalog, ai_identity_token=_TEST_AI_TOKEN)
+        create_app(MockBackendConfig(catalog_path=catalog, ai_identity_token=_TEST_AI_TOKEN))
     ) as test_client:
         for path in ("/catalog", "/catalog?full=false"):
             response = test_client.get(path, headers=_AI_AUTH_HEADERS)
