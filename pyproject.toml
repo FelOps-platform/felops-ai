@@ -12,6 +12,7 @@ dependencies = [
     "pydantic==2.14.1",
     "langchain-core==1.6.12",
     "langgraph==1.2.16",
+    "litellm==1.106.4",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +37,8 @@ select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]
+testpaths = ["tests"]
+markers = ["live: live LLM API round-trip tests (requires API_KEY)"]
 
 [tool.importlinter]
 root_package = "felops"
