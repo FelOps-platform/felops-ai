@@ -34,7 +34,7 @@ _NS = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
 
 
 def _vector(dense: list[float] | None = None, sparse: dict[int, float] | None = None) -> Vector:
-    return Vector(dense=dense or [0.1, 0.2, 0.3], sparse=sparse)
+    return Vector(dense=[0.1, 0.2, 0.3] if dense is None else dense, sparse=sparse)
 
 
 def _item(
@@ -335,6 +335,13 @@ class TestVectorValidation:
                 _NS,
                 [_item("a", dense=[0.1, 0.2]), _item("b", dense=[0.1, 0.2, 0.3])],
             )
+
+    @pytest.mark.asyncio
+    async def test_empty_vector_dimension_is_rejected(self, store: QdrantVectorStore) -> None:
+        raw_vector = Vector.model_construct(dense=[])
+        item = VectorItem.model_construct(id="a", vector=raw_vector, payload={})
+        with pytest.raises(ValueError, match="positive"):
+            await store.upsert(_NS, [item])
 
     @pytest.mark.asyncio
     async def test_empty_upsert_is_a_no_op(self, store: QdrantVectorStore) -> None:

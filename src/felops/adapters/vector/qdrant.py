@@ -137,6 +137,24 @@ def _point_id(ns: NameSpace, item_id: str) -> str:
     return str(uuid.uuid5(_POINT_ID_NAMESPACE, key))
 
 
+def _parse_filter_condition(condition: Any) -> dict[str, Any] | None:
+    """Validate and normalize a single payload filter condition.
+
+    Returns None for workspace_id (which is scoped from NameSpace, not Filter).
+    """
+    if not isinstance(condition, dict):
+        raise ValueError(f"unsupported filter condition: {condition!r}")
+    key = condition.get("key")
+    if not isinstance(key, str) or not key:
+        raise ValueError(f"unsupported filter condition: {condition!r}")
+    if key == "workspace_id":
+        return None
+    match = condition.get("match")
+    if not isinstance(match, dict) or "value" not in match:
+        raise ValueError(f"unsupported filter condition: {condition!r}")
+    return {"key": key, "match": {"value": match["value"]}}
+
+
 def _payload_filter(ns: NameSpace, flt: Filter) -> models.Filter:
     """Build a Qdrant filter from the namespace plus caller payload conditions.
 
@@ -146,18 +164,9 @@ def _payload_filter(ns: NameSpace, flt: Filter) -> models.Filter:
     """
     conditions: list[dict[str, Any]] = []
     for condition in flt.must:
-        if not isinstance(condition, dict):
-            raise ValueError(f"unsupported filter condition: {condition!r}")
-        key = condition.get("key")
-        if not isinstance(key, str) or not key:
-            raise ValueError(f"unsupported filter condition: {condition!r}")
-        if key == "workspace_id":
-            # Workspace scoping comes from NameSpace, never from Filter.
-            continue
-        match = condition.get("match")
-        if not isinstance(match, dict) or "value" not in match:
-            raise ValueError(f"unsupported filter condition: {condition!r}")
-        conditions.append({"key": key, "match": {"value": match["value"]}})
+        parsed = _parse_filter_condition(condition)
+        if parsed is not None:
+            conditions.append(parsed)
 
     namespace_conditions = [
         {"key": field, "match": {"value": getattr(ns, field)}} for field in _NAMESPACE_FIELDS
@@ -286,7 +295,10 @@ class QdrantVectorStore:
         dims = {len(_dense_values(item.vector)) for item in items}
         if len(dims) != 1:
             raise ValueError("all vectors in one upsert must have the same dimension")
-        return dims.pop()
+        dim = dims.pop()
+        if dim <= 0:
+            raise ValueError("vector dimension must be positive")
+        return dim
 
     def _point(self, ns: NameSpace, item: VectorItem) -> models.PointStruct:
         payload = dict(item.payload)
