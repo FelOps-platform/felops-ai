@@ -8,6 +8,8 @@ between tests.
 
 from __future__ import annotations
 
+import http.client
+import io
 import json
 import urllib.error
 import urllib.request
@@ -422,6 +424,112 @@ def test_push_catalog_returns_502_on_url_error(monkeypatch: pytest.MonkeyPatch) 
         raise urllib.error.URLError("offline")
 
     monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
-    with TestClient(create_app()) as test_client:
+    with TestClient(
+        create_app(MockBackendConfig(backend_identity_token="test-backend-token"))
+    ) as test_client:
         response = test_client.post("/catalog/push")
     assert response.status_code == 502
+
+
+def test_backend_identity_token_unset_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BACKEND_IDENTITY_TOKEN", raising=False)
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda *args, **kwargs: pytest.fail("unexpected push")
+    )
+    with TestClient(create_app()) as test_client:
+        response = test_client.post("/catalog/push")
+    assert response.status_code == 500
+    assert response.json()["detail"] == "BACKEND_IDENTITY_TOKEN is not configured."
+
+
+@pytest.mark.parametrize("token", ["", "   "])
+def test_backend_identity_token_empty_or_whitespace_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, token: str
+) -> None:
+    monkeypatch.setenv("BACKEND_IDENTITY_TOKEN", "environment-token")
+    with TestClient(create_app(MockBackendConfig(backend_identity_token=token))) as test_client:
+        response = test_client.post("/catalog/push")
+    assert response.status_code == 500
+    assert response.json()["detail"] == "BACKEND_IDENTITY_TOKEN is not configured."
+
+
+def _fake_response(body: bytes, status: int = 200) -> io.BytesIO:
+    response = io.BytesIO(body)
+    response.status = status  # type: ignore[attr-defined]
+    return response
+
+
+def test_push_catalog_returns_502_on_non_json_200_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda *args, **kwargs: _fake_response(b"not-json")
+    )
+    with TestClient(create_app(MockBackendConfig(backend_identity_token="token"))) as test_client:
+        response = test_client.post("/catalog/push")
+    assert response.status_code == 502
+    assert "invalid JSON response" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        http.client.RemoteDisconnected("closed"),
+        http.client.IncompleteRead(b"part"),
+        TimeoutError("timed out"),
+        UnicodeDecodeError("utf-8", b"\\xff", 0, 1, "bad"),
+    ],
+)
+def test_push_catalog_returns_502_on_http_client_and_timeout_errors(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise exc
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    with TestClient(create_app(MockBackendConfig(backend_identity_token="token"))) as test_client:
+        response = test_client.post("/catalog/push")
+    assert response.status_code == 502
+
+
+def test_push_catalog_accepts_empty_200_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: _fake_response(b""))
+    with TestClient(create_app(MockBackendConfig(backend_identity_token="token"))) as test_client:
+        response = test_client.post("/catalog/push")
+    assert response.status_code == 200
+    assert response.json()["response"] == {"status": 200}
+
+
+@pytest.mark.parametrize(
+    "target_url", ["", "   ", "not-a-url", "file:///etc/passwd", "ftp://example.com/catalog"]
+)
+def test_push_catalog_rejects_invalid_target_url(target_url: str) -> None:
+    with TestClient(create_app(MockBackendConfig(backend_identity_token="token"))) as test_client:
+        response = test_client.post("/catalog/push", json={"target_url": target_url})
+    assert response.status_code == 422
+
+
+def test_push_catalog_valid_target_stays_mock_open() -> None:
+    app = create_app(
+        MockBackendConfig(
+            backend_identity_token="token",
+            push_handler=lambda url, payload, headers: {"url": url},
+        )
+    )
+    with TestClient(app) as test_client:
+        response = test_client.post("/catalog/push", json={"target_url": "http://127.0.0.1:9999"})
+    assert response.status_code == 200
+    assert response.json()["target"] == "http://127.0.0.1:9999/catalog"
+
+
+def test_webhook_sink_preserves_null_envelope_fields(client: TestClient) -> None:
+    event = _webhook_event(event_id="evt-null", conversation_id=None, job_id=None)
+    omitted_event = _webhook_event(event_id="evt-omitted")
+    omitted_event.pop("conversation_id")
+    omitted_event.pop("job_id")
+    for event in (event, omitted_event):
+        response = client.post("/webhooks/ai", json=event, headers=_AI_AUTH_HEADERS)
+        assert response.status_code == 202
+    events = client.get("/webhooks/ai?type=job.completed").json()
+    assert len(events) == 2
+    for event in events:
+        assert "conversation_id" in event and event["conversation_id"] is None
+        assert "job_id" in event and event["job_id"] is None

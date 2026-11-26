@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import http.client
 import json
 import os
 import threading
@@ -13,11 +14,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LOCAL_FIXTURES = Path(__file__).parent / "fixtures"
@@ -55,17 +57,42 @@ def _default_push_catalog(
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = resp.read().decode("utf-8")
-            return json.loads(body) if body else {"status": resp.status}
-    except (urllib.error.URLError, TimeoutError) as exc:
+            status = resp.status
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        TimeoutError,
+        UnicodeDecodeError,
+    ) as exc:
         raise HTTPException(
             status_code=502, detail=f"failed to push catalog to {url}: {exc}"
+        ) from exc
+    if not body:
+        return {"status": status}
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"failed to push catalog to {url}: invalid JSON response ({exc})",
         ) from exc
 
 
 class CatalogPushRequest(BaseModel):
-    """Optional override for where to push ``PUT /catalog``."""
+    """Optional override for the mock-open dev trigger's ``PUT /catalog`` target."""
 
     target_url: str | None = None
+
+    @field_validator("target_url")
+    @classmethod
+    def _validate_target_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        parsed = urlparse(cleaned)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("target_url must be an http:// or https:// URL")
+        return cleaned
 
 
 class WebhookEvent(BaseModel):
@@ -90,11 +117,9 @@ def _resolve_env_override(explicit: str | None, env_var: str) -> str | None:
     return os.getenv(env_var)
 
 
-def _read_configured_ai_token(configured: str | None) -> str | None:
-    token = _resolve_env_override(configured, "AI_IDENTITY_TOKEN")
-    if token is None:
-        return None
-    if not token.strip():
+def _read_configured_token(configured: str | None, env_var: str) -> str | None:
+    token = _resolve_env_override(configured, env_var)
+    if token is None or not token.strip():
         return None
     return token
 
@@ -139,8 +164,8 @@ class _MockBackendState:
         self.catalog_path = config.catalog_path or _DEFAULT_CATALOG_PATH
         self.kb_dir = (config.kb_dir or _DEFAULT_KB_DIR).resolve()
         self.fixtures_dir = config.fixtures_dir or _LOCAL_FIXTURES
-        self.ai_token = _read_configured_ai_token(config.ai_identity_token)
-        self.backend_token = _resolve_env_override(
+        self.ai_token = _read_configured_token(config.ai_identity_token, "AI_IDENTITY_TOKEN")
+        self.backend_token = _read_configured_token(
             config.backend_identity_token, "BACKEND_IDENTITY_TOKEN"
         )
         self.ai_service_url = _resolve_ai_service_url(config.ai_service_url)
@@ -164,11 +189,14 @@ class _MockBackendState:
         return self.ai_service_url
 
     def push_catalog(self, body: CatalogPushRequest | None) -> dict[str, Any]:
+        if self.backend_token is None:
+            raise HTTPException(status_code=500, detail="BACKEND_IDENTITY_TOKEN is not configured.")
         target = f"{self._resolve_push_base_url(body).rstrip('/')}/catalog"
         tools = self.catalog_tools()
-        headers = {"Content-Type": "application/json"}
-        if self.backend_token:
-            headers["Authorization"] = f"Bearer {self.backend_token}"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.backend_token}",
+        }
         remote = self.push_handler(target, {"tools": tools}, headers)
         return {"pushed": True, "target": target, "tool_count": len(tools), "response": remote}
 
@@ -205,7 +233,7 @@ class _MockBackendState:
     def receive_webhook(self, event: WebhookEvent) -> dict[str, bool]:
         if event.type not in _CONTRACT_EVENT_TYPES:
             raise HTTPException(status_code=400, detail=f"unknown event type: {event.type}")
-        payload = event.model_dump(mode="json", exclude_none=True)
+        payload = event.model_dump(mode="json", exclude_none=False)
         payload["received_at"] = datetime.now(timezone.utc).isoformat()
         with self.events_lock:
             if event.event_id in self.seen_event_ids:
@@ -299,6 +327,8 @@ def clear_webhooks(state: _MockBackendState = Depends(_get_state)) -> None:
 
 
 def _register_catalog_routes(app: FastAPI) -> None:
+    # GET /catalog is contract-authenticated; POST /catalog/push stays mock-open as a
+    # dev/demo trigger, with validated HTTP(S) targets and authenticated outbound pushes.
     app.add_api_route(
         "/catalog", get_catalog, methods=["GET"], dependencies=[Depends(verify_ai_identity)]
     )

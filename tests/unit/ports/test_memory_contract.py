@@ -82,9 +82,7 @@ def _item(item_id: str, content: str) -> MemoryItem:
     return MemoryItem(item_id=item_id, content=content)
 
 
-async def _read_scores_for_id(
-    store: MemoryStore, scope: MemoryScope, item_id: str
-) -> list[float]:
+async def _read_scores_for_id(store: MemoryStore, scope: MemoryScope, item_id: str) -> list[float]:
     items = await store.read(scope, None)
     return [item.score for item in items if item.item_id == item_id]
 
@@ -97,7 +95,7 @@ async def _read_scores_for_id(
 class TestMemoryStoreProtocol:
     def test_is_structurally_compatible(self) -> None:
         store: MemoryStore = FakeMemoryStore()
-        assert store is not None
+        assert isinstance(store, MemoryStore)
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +137,7 @@ class TestMemoryStoreContract:
         assert await store.read(_OTHER_THREAD, None) == []
 
     @pytest.mark.asyncio
-    async def test_workspace_scoped_item_is_readable_by_any_agent(
-        self, store: MemoryStore
-    ) -> None:
+    async def test_workspace_scoped_item_is_readable_by_any_agent(self, store: MemoryStore) -> None:
         """An item written with agent_id=None is readable by any agent in that workspace."""
         await store.write(_WS_LONG_TERM, [_item("fact-1", "customer prefers Arabic")])
 
@@ -154,9 +150,7 @@ class TestMemoryStoreContract:
         assert await store.read(_THREAD, None) == []
 
     @pytest.mark.asyncio
-    async def test_agent_scoped_items_are_isolated_between_agents(
-        self, store: MemoryStore
-    ) -> None:
+    async def test_agent_scoped_items_are_isolated_between_agents(self, store: MemoryStore) -> None:
         await store.write(_AG1_LONG_TERM, [_item("ag1-only", "agent-1 private note")])
 
         assert {item.item_id for item in await store.read(_AG1_LONG_TERM, None)} == {"ag1-only"}
@@ -195,9 +189,7 @@ class TestMemoryStoreContract:
         assert [item.content for item in items] == ["new fact"]
 
     @pytest.mark.asyncio
-    async def test_retried_write_without_explicit_id_deduplicates(
-        self, store: MemoryStore
-    ) -> None:
+    async def test_retried_write_without_explicit_id_deduplicates(self, store: MemoryStore) -> None:
         """Two independently constructed identical facts collapse into one stored item."""
         await store.write(_WS_LONG_TERM, [MemoryItem(content="Prefers  Arabic", metadata={"a": 1})])
         await store.write(_WS_LONG_TERM, [MemoryItem(content="prefers arabic", metadata={"a": 1})])

@@ -23,11 +23,12 @@ same item cannot create duplicate records, and identical ``item_id``s
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from felops.domain.memory import MemoryItem, MemoryScope
 
 
+@runtime_checkable
 class MemoryStore(Protocol):
     """Async memory port.
 

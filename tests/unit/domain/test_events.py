@@ -9,7 +9,7 @@ from felops.domain.events import EventEnvelope, EventType
 
 
 class TestEventType:
-    def test_all_12_members_exist(self):
+    def test_all_14_members_exist(self):
         expected = {
             "plan.created",
             "retrieval.completed",
@@ -23,12 +23,14 @@ class TestEventType:
             "message.final",
             "usage.recorded",
             "error",
+            "job.completed",
+            "ingestion.status",
         }
         actual = {e.value for e in EventType}
         assert actual == expected
 
     def test_member_count(self):
-        assert len(EventType) == 12
+        assert len(EventType) == 14
 
     def test_wire_values_match_spec(self):
         """Each member's value must match exactly."""
@@ -44,6 +46,8 @@ class TestEventType:
         assert EventType.MESSAGE_FINAL == "message.final"
         assert EventType.USAGE_RECORDED == "usage.recorded"
         assert EventType.ERROR == "error"
+        assert EventType.JOB_COMPLETED == "job.completed"
+        assert EventType.INGESTION_STATUS == "ingestion.status"
 
     def test_is_str(self):
         """StrEnum members are plain strings  safe for JSON serialisation."""
@@ -133,3 +137,13 @@ class TestEventEnvelope:
         assert restored.event_id == env.event_id
         assert restored.seq == env.seq
         assert restored.type == env.type
+
+    @pytest.mark.parametrize("event_type", [EventType.JOB_COMPLETED, EventType.INGESTION_STATUS])
+    def test_webhook_event_types_round_trip(self, event_type):
+        env = self._make(type=event_type)
+        assert EventEnvelope.model_validate(env.model_dump()).type == event_type
+
+    @pytest.mark.parametrize("field", ["workspace_id", "agent_id", "sub_agent_id"])
+    def test_empty_required_ids_rejected(self, field):
+        with pytest.raises(ValidationError):
+            self._make(**{field: ""})

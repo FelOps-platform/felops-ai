@@ -8,11 +8,12 @@ The model runs in a thread pool so it never blocks the API event loop (§3).
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from felops.domain.retrieval_types import Vector
 
 
+@runtime_checkable
 class EmbeddingModel(Protocol):
     """Async embedding-model port.
 
@@ -23,7 +24,7 @@ class EmbeddingModel(Protocol):
         namespace-per-model versioning so a model change triggers re-indexing.
     `dim` : int
         Dimensionality of the dense output vector.
-    
+
     Methods
     -------
     `embed_documents`

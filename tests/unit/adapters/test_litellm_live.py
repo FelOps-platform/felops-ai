@@ -5,8 +5,12 @@ Skipped unless API_KEY is set (shell or repo-root `.env`).
     pytest tests/unit/adapters/test_litellm_live.py -v
 
 Optional overrides:
-    FELOPS_LIVE_LLM_MODEL   model to use (default: openai/gpt-oss-20b,
-                            which supports tools and JSON mode on Groq)
+    LLM_PROVIDER                  LiteLLM provider prefix (default: groq; e.g. openrouter)
+    FELOPS_LIVE_LLM_MODEL         model to use (default: openai/gpt-oss-20b,
+                                  which supports tools and JSON mode on Groq)
+    FELOPS_LIVE_LLM_OVERRIDE_MODEL
+                                  model for test_request_model_overrides_default
+                                  (defaults to openai/gpt-oss-20b on groq, else MODEL)
 
 Free-tier rate limits are not a code failure: a retryable rate-limit error
 skips the test instead of failing it.
@@ -108,7 +112,12 @@ pytestmark = [
     ),
 ]
 
+PROVIDER = os.getenv("LLM_PROVIDER", "groq").strip() or "groq"
 MODEL = os.getenv("FELOPS_LIVE_LLM_MODEL", "openai/gpt-oss-20b")
+OVERRIDE_MODEL = os.getenv(
+    "FELOPS_LIVE_LLM_OVERRIDE_MODEL",
+    "openai/gpt-oss-20b" if PROVIDER == "groq" else MODEL,
+)
 CAPS = ProviderCaps(tools=True, json_mode=True, max_ctx=131_072)
 REPO_PROMPTS = Path(__file__).resolve().parents[3] / "prompts"
 ARABIC = re.compile(r"[\u0600-\u06FF]")
@@ -127,10 +136,11 @@ T = TypeVar("T")
 
 
 def _provider(**kw: Any) -> LiteLLMProvider:
-    # LiteLLM's Groq backend reads GROQ_API_KEY, not API_KEY, so pass the key
-    # explicitly. A caller-supplied api_key (the bad-key tests) still wins.
+    # LiteLLM reads provider-specific env vars (e.g. GROQ_API_KEY,
+    # OPENROUTER_API_KEY), not API_KEY, so pass the key explicitly.
+    # A caller-supplied api_key (the bad-key tests) still wins.
     kw.setdefault("api_key", os.getenv("API_KEY"))
-    return LiteLLMProvider(provider="groq", capabilities=CAPS, default_model=MODEL, **kw)
+    return LiteLLMProvider(provider=PROVIDER, capabilities=CAPS, default_model=MODEL, **kw)
 
 
 def _is_rate_limit_error(exc: LLMError) -> bool:
@@ -150,7 +160,7 @@ def _run(coro: Awaitable[T]) -> T:
         return asyncio.run(go())
     except LLMError as exc:
         if _is_rate_limit_error(exc):
-            pytest.skip("Groq rate limit hit (free tier)")
+            pytest.skip(f"{PROVIDER} rate limit hit (free tier)")
         raise
 
 
@@ -188,10 +198,11 @@ def test_completion_works() -> None:
 
 def test_request_model_overrides_default() -> None:
     req = LLMRequest(
-        messages=(LLMMessage("user", "Say hi."),), model="openai/gpt-oss-20b", max_tokens=300
+        messages=(LLMMessage("user", "Say hi."),), model=OVERRIDE_MODEL, max_tokens=300
     )
     out = _run(_provider().complete(req))
-    assert "20b" in out.model.lower()
+    expected_fragment = OVERRIDE_MODEL.split("/")[-1].lower()
+    assert expected_fragment in out.model.lower()
 
 
 def test_json_mode_returns_parseable_json() -> None:

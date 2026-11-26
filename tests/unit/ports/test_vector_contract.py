@@ -139,7 +139,7 @@ class TestVectorStoreProtocol:
         indirectly: we assign to a typed variable.
         """
         store: VectorStore = FakeVectorStore()
-        assert store is not None
+        assert isinstance(store, VectorStore)
 
 
 # ---------------------------------------------------------------------------
@@ -151,11 +151,11 @@ class TestVectorStoreContract:
     """Contract tests exercising VectorStore semantics."""
 
     @pytest.fixture()
-    def store(self) -> FakeVectorStore:
+    def store(self) -> VectorStore:
         return FakeVectorStore()
 
     @pytest.mark.asyncio
-    async def test_upsert_and_search(self, store: FakeVectorStore) -> None:
+    async def test_upsert_and_search(self, store: VectorStore) -> None:
         item = _make_item()
         await store.upsert(_NS, [item])
 
@@ -164,7 +164,7 @@ class TestVectorStoreContract:
         assert hits[0].id == "item-1"
 
     @pytest.mark.asyncio
-    async def test_upsert_replaces_existing(self, store: FakeVectorStore) -> None:
+    async def test_upsert_replaces_existing(self, store: VectorStore) -> None:
         await store.upsert(_NS, [_make_item("a", version=1)])
         await store.upsert(_NS, [_make_item("a", version=2)])
 
@@ -173,12 +173,12 @@ class TestVectorStoreContract:
         assert hits[0].payload["version"] == 2
 
     @pytest.mark.asyncio
-    async def test_search_empty_returns_empty(self, store: FakeVectorStore) -> None:
+    async def test_search_empty_returns_empty(self, store: VectorStore) -> None:
         hits = await store.search(_NS, _query(), k=10)
         assert hits == []
 
     @pytest.mark.asyncio
-    async def test_search_respects_k(self, store: FakeVectorStore) -> None:
+    async def test_search_respects_k(self, store: VectorStore) -> None:
         items = [_make_item(f"item-{i}") for i in range(5)]
         await store.upsert(_NS, items)
 
@@ -186,14 +186,14 @@ class TestVectorStoreContract:
         assert len(hits) == 3
 
     @pytest.mark.asyncio
-    async def test_search_applies_payload_filter(self, store: FakeVectorStore) -> None:
+    async def test_search_applies_payload_filter(self, store: VectorStore) -> None:
         await store.upsert(_NS, [_make_item("en", lang="en"), _make_item("fr", lang="fr")])
 
         hits = await store.search(_NS, _query(_filter(lang="en")), k=10)
         assert [h.id for h in hits] == ["en"]
 
     @pytest.mark.asyncio
-    async def test_search_ignores_workspace_id_in_filter(self, store: FakeVectorStore) -> None:
+    async def test_search_ignores_workspace_id_in_filter(self, store: VectorStore) -> None:
         """Workspace scoping comes from ``ns``; a filter key is not authoritative."""
         await store.upsert(_NS, [_make_item()])
 
@@ -201,25 +201,25 @@ class TestVectorStoreContract:
         assert [h.id for h in hits] == ["item-1"]
 
     @pytest.mark.asyncio
-    async def test_delete_returns_count(self, store: FakeVectorStore) -> None:
+    async def test_delete_returns_count(self, store: VectorStore) -> None:
         await store.upsert(_NS, [_make_item("a"), _make_item("b")])
         deleted = await store.delete(_NS, Filter())
         assert deleted == 2
 
     @pytest.mark.asyncio
-    async def test_delete_on_empty_returns_zero(self, store: FakeVectorStore) -> None:
+    async def test_delete_on_empty_returns_zero(self, store: VectorStore) -> None:
         deleted = await store.delete(_NS, Filter())
         assert deleted == 0
 
     @pytest.mark.asyncio
-    async def test_delete_is_idempotent(self, store: FakeVectorStore) -> None:
+    async def test_delete_is_idempotent(self, store: VectorStore) -> None:
         await store.upsert(_NS, [_make_item()])
 
         assert await store.delete(_NS, Filter()) == 1
         assert await store.delete(_NS, Filter()) == 0
 
     @pytest.mark.asyncio
-    async def test_delete_only_removes_matching_items(self, store: FakeVectorStore) -> None:
+    async def test_delete_only_removes_matching_items(self, store: VectorStore) -> None:
         await store.upsert(_NS, [_make_item("a", version=1), _make_item("b", version=2)])
 
         deleted = await store.delete(_NS, _filter(version=1))
@@ -229,7 +229,7 @@ class TestVectorStoreContract:
         assert [h.id for h in hits] == ["b"]
 
     @pytest.mark.asyncio
-    async def test_search_after_delete_returns_empty(self, store: FakeVectorStore) -> None:
+    async def test_search_after_delete_returns_empty(self, store: VectorStore) -> None:
         await store.upsert(_NS, [_make_item()])
         await store.delete(_NS, Filter())
 
@@ -237,7 +237,7 @@ class TestVectorStoreContract:
         assert hits == []
 
     @pytest.mark.asyncio
-    async def test_namespaces_are_isolated(self, store: FakeVectorStore) -> None:
+    async def test_namespaces_are_isolated(self, store: VectorStore) -> None:
         ns_a = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-a")
         ns_b = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-b")
 
@@ -251,7 +251,7 @@ class TestVectorStoreContract:
         assert [h.id for h in hits_b] == ["b"]
 
     @pytest.mark.asyncio
-    async def test_workspaces_are_isolated(self, store: FakeVectorStore) -> None:
+    async def test_workspaces_are_isolated(self, store: VectorStore) -> None:
         """The same agent/source in another workspace must be unreachable (§2.3)."""
         ns_a = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
         ns_b = NameSpace(workspace_id="ws-2", agent_id="ag-1", source_id="src-1")

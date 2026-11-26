@@ -1,5 +1,6 @@
 """Unit tests for felops.domain.state  AgentState and all value objects."""
 
+import copy
 import operator
 
 import pytest
@@ -19,6 +20,7 @@ from felops.domain.state import (
     Chunk,
     Plan,
     PlanStep,
+    StrictAgentConfig,
     ToolCall,
     TraceEvent,
 )
@@ -128,6 +130,15 @@ class TestToolCall:
         with pytest.raises(ValidationError):
             ToolCall(tool_id="tool-1", tool_name="shopify_lookup", idem_key=None)  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize("key", ["", "   ", "\t\n"])
+    def test_blank_idem_key_rejected(self, key):
+        with pytest.raises(ValidationError):
+            ToolCall(tool_id="tool", idem_key=key)
+
+    def test_empty_tool_id_rejected(self):
+        with pytest.raises(ValidationError):
+            ToolCall(tool_id="", idem_key="key")
+
     def test_no_side_effect_class_field(self):
         assert "side_effect_class" not in ToolCall.model_fields
 
@@ -205,12 +216,52 @@ class TestApproval:
         b = Approval(call_id="c-1", tool_id="a", params_hash="h")
         assert a.approval_id != b.approval_id
 
+    def test_params_deeply_immutable_and_status_mutable(self):
+        source = {"x": {"items": [1, 2]}}
+        ap = Approval(call_id="c", tool_id="a", params_hash="h", params=source)
+        source["x"]["items"].append(3)
+        assert ap.params["x"]["items"] == [1, 2]
+        with pytest.raises(TypeError):
+            ap.params["new"] = 1
+        with pytest.raises(TypeError):
+            ap.params["x"]["items"].append(3)
+        with pytest.raises(ValidationError):
+            ap.params = {}
+        ap.status = ApprovalStatus.APPROVED
+        ap.approver_id = "user"
+
+    @pytest.mark.parametrize("field", ["call_id", "tool_id", "params_hash"])
+    def test_empty_required_ids_rejected(self, field):
+        values = dict(call_id="c", tool_id="a", params_hash="h")
+        values[field] = ""
+        with pytest.raises(ValidationError):
+            Approval(**values)
+
     def test_mutable_status(self):
         ap = Approval(call_id="c-1", tool_id="a", params_hash="h")
         ap.status = ApprovalStatus.APPROVED
         ap.approver_id = "user-42"
         assert ap.status == ApprovalStatus.APPROVED
         assert ap.approver_id == "user-42"
+
+    def test_params_serialization_deepcopy_and_strict_msgpack_roundtrip(self, monkeypatch):
+        import langgraph.checkpoint.serde._msgpack as _msgpack
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+        ap = Approval(call_id="c", tool_id="t", params_hash="h", params={"nested": [{"x": 1}]})
+        assert isinstance(ap.model_dump()["params"], dict)
+        assert Approval.model_validate_json(ap.model_dump_json()) == ap
+        duplicate = copy.deepcopy(ap)
+        with pytest.raises(TypeError):
+            duplicate.params["nested"].append(2)
+
+        monkeypatch.setenv("LANGGRAPH_STRICT_MSGPACK", "true")
+        monkeypatch.setattr(_msgpack, "STRICT_MSGPACK_ENABLED", True)
+        serde = JsonPlusSerializer(allowed_msgpack_modules=STATE_TYPES)
+        restored = serde.loads_typed(serde.dumps_typed(ap))
+        assert isinstance(restored, Approval)
+        with pytest.raises(TypeError):
+            restored.params["nested"][0]["x"] = 2
 
 
 # TraceEvent
@@ -245,6 +296,10 @@ class TestTraceEvent:
 
 
 class TestAgentConfig:
+    def test_tool_id_must_be_nonempty(self):
+        with pytest.raises(ValidationError):
+            AgentToolConfig(tool_id="")
+
     def test_defaults(self):
         cfg = AgentConfig()
         assert cfg.name == ""
@@ -378,3 +433,36 @@ class TestAgentState:
         state = AgentState(workspace_id="ws-1", agent_id="ag-1", agent_config=cfg)
         assert state.agent_config is not None
         assert state.agent_config.name == "Support"
+
+
+class TestStrictAgentConfig:
+    def test_required_contract_fields_and_conversion(self):
+        payload = {
+            "name": "Support",
+            "instructions": {
+                "role": "help",
+                "language_constraints": "English",
+                "response_format": "text",
+            },
+            "tools": [{"tool_id": "lookup", "requires_approval": False}],
+            "unknown": 1,
+        }
+        cfg = StrictAgentConfig.model_validate(payload)
+        assert cfg.to_agent_config().name == "Support"
+        assert "unknown" not in cfg.model_dump()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {},
+            {"name": " ", "instructions": {}, "tools": []},
+            {
+                "name": "x",
+                "instructions": {"role": "r", "language_constraints": "l", "response_format": "f"},
+                "tools": [{"tool_id": "x"}],
+            },
+        ],
+    )
+    def test_invalid_contract_config_rejected(self, payload):
+        with pytest.raises(ValidationError):
+            StrictAgentConfig.model_validate(payload)
