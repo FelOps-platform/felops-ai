@@ -34,8 +34,7 @@ from langgraph.graph.state import CompiledStateGraph
 from felops.domain.agent import DEFAULT_AUDIENCE, DEFAULT_SUB_AGENT_ID
 from felops.domain.job import Job, JobSender, JobStatus, JobType
 from felops.domain.state import AgentConfig, AgentState
-from felops.domain.workspace import WorkspaceContext
-from felops.orchestrator.graph import make_thread_config
+from felops.domain.workspace import WorkspaceContext, make_thread_id
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +153,9 @@ class MessageService:
         )
 
         # 6. Build thread config
-        thread_config = make_thread_config(workspace.workspace_id, conversation_id)
+        thread_config: RunnableConfig = {
+            "configurable": {"thread_id": make_thread_id(workspace.workspace_id, conversation_id)}
+        }
 
         # 7. Spawn background task and retain a strong reference until done
         task = asyncio.create_task(

@@ -11,8 +11,7 @@ from langchain_core.messages import HumanMessage
 from felops.domain.agent import DEFAULT_AUDIENCE, DEFAULT_SUB_AGENT_ID
 from felops.domain.job import JobSender, JobStatus
 from felops.domain.state import AgentConfig, AgentInstructions, AgentState
-from felops.domain.workspace import WorkspaceContext
-from felops.orchestrator.graph import make_thread_config
+from felops.domain.workspace import WorkspaceContext, make_thread_id
 from felops.services.message_service import (
     ConversationBusy,
     DuplicateIdempotencyKey,
@@ -330,7 +329,7 @@ async def test_initial_state_has_correct_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_thread_config_uses_make_thread_config() -> None:
+async def test_thread_config_uses_canonical_thread_id() -> None:
     service = MessageService()
     graph = _make_graph()
     await service.submit_message(
@@ -346,7 +345,7 @@ async def test_thread_config_uses_make_thread_config() -> None:
     )
     await _drain_tasks(service)
     thread_cfg = graph.ainvoke.call_args.kwargs["config"]
-    assert thread_cfg == make_thread_config("ws-42", "conv-99")
+    assert thread_cfg == {"configurable": {"thread_id": make_thread_id("ws-42", "conv-99")}}
 
 
 @pytest.mark.asyncio

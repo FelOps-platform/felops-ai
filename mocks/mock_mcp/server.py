@@ -106,9 +106,7 @@ class _MockMcpState:
         self.protocol_version = config.protocol_version
 
         catalog = _load_json(self.catalog_path)
-        self.tools: dict[str, dict[str, Any]] = {
-            tool["tool_id"]: tool for tool in catalog["tools"]
-        }
+        self.tools: dict[str, dict[str, Any]] = {tool["tool_id"]: tool for tool in catalog["tools"]}
         self.examples: dict[str, dict[str, Any]] = dict(catalog.get("examples") or {})
 
         self.calls: list[dict[str, Any]] = []
@@ -241,9 +239,7 @@ def _handle_tools_call(
         _rpc_result(
             request_id,
             {
-                "content": [
-                    {"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}
-                ],
+                "content": [{"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}],
                 "structuredContent": envelope,
                 "isError": envelope["status"] == "failed",
             },
@@ -335,9 +331,7 @@ async def handle_rpc(request: Request) -> Response:
         return JSONResponse(_rpc_result(request_id, {}))
 
     if method == "tools/list":
-        return JSONResponse(
-            _rpc_result(request_id, {"tools": state.list_tools(workspace_id)})
-        )
+        return JSONResponse(_rpc_result(request_id, {"tools": state.list_tools(workspace_id)}))
 
     if method == "tools/call":
         return _handle_tools_call(state, request_id, params, workspace_id)

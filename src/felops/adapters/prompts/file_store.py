@@ -53,9 +53,7 @@ def _candidate_paths(
                 root / sub_agent / f"{name}{TEMPLATE_SUFFIX}",
             )
         )
-    candidates.append(
-        (PromptScope.PLATFORM, root / PLATFORM_DIR / f"{name}{TEMPLATE_SUFFIX}")
-    )
+    candidates.append((PromptScope.PLATFORM, root / PLATFORM_DIR / f"{name}{TEMPLATE_SUFFIX}"))
     return candidates
 
 
@@ -68,9 +66,7 @@ def _read_template(path: Path, root: Path, name: str) -> str | None:
     try:
         return resolved.read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
     except (UnicodeDecodeError, OSError) as exc:
-        raise PromptNotFound(
-            f"prompt template is not valid UTF-8: {name!r}"
-        ) from exc
+        raise PromptNotFound(f"prompt template is not valid UTF-8: {name!r}") from exc
 
 
 def _build_version(name: str, template: str, scope: PromptScope) -> PromptVersion:

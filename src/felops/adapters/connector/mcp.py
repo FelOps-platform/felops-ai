@@ -226,9 +226,7 @@ class McpConnector:
             if self._sessions.get(ctx.workspace_id) == expected:
                 self._sessions.pop(ctx.workspace_id, None)
 
-    async def _notify(
-        self, ctx: WorkspaceContext, session: _Session, method: str
-    ) -> None:
+    async def _notify(self, ctx: WorkspaceContext, session: _Session, method: str) -> None:
         client = self._client_or_create()
         try:
             await client.post(
@@ -267,9 +265,7 @@ class McpConnector:
         except _McpFailure as exc:
             if exc.status_code != 404 or session.session_id is None:
                 raise
-            logger.info(
-                "mcp session expired for workspace %s; re-initializing", ctx.workspace_id
-            )
+            logger.info("mcp session expired for workspace %s; re-initializing", ctx.workspace_id)
             await self._invalidate(ctx, session)
             session = await self._ensure_initialized(ctx)
             result, _ = await self._post_raw(ctx, method, params, session=session)
@@ -312,9 +308,7 @@ class McpConnector:
             ) from exc
 
         if response.status_code >= 400:
-            raise _McpFailure(
-                _rpc_error_from_response(response), status_code=response.status_code
-            )
+            raise _McpFailure(_rpc_error_from_response(response), status_code=response.status_code)
 
         try:
             payload = _decode_json_rpc(response, request_id)

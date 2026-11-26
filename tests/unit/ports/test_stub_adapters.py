@@ -24,6 +24,12 @@ class TestStubPromptStore(PromptStoreContract):
     def make_store(self, seeds: list[PromptSeed]):
         store = StubPromptStore()
         for s in seeds:
-            store.add(s.scope, s.name, s.template, workspace_id=s.workspace_id,
-                      agent_id=s.agent_id, sub_agent_id=s.sub_agent_id)
+            store.add(
+                s.scope,
+                s.name,
+                s.template,
+                workspace_id=s.workspace_id,
+                agent_id=s.agent_id,
+                sub_agent_id=s.sub_agent_id,
+            )
         return store

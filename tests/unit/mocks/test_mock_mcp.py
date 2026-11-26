@@ -377,4 +377,3 @@ def test_every_catalog_example_is_served() -> None:
             data = result["structuredContent"]["data"]
             for key, value in expected.items():
                 assert data[key] == value, (tool_id, key)
-

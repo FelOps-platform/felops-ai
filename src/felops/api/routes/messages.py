@@ -40,9 +40,7 @@ router = APIRouter()
 async def submit_message(
     body: SubmitMessageRequest,
     workspace: Annotated[WorkspaceContext, Depends(get_workspace_context)],
-    conversation_id: Annotated[
-        str, Path(description="Conversation identifier", min_length=1)
-    ],
+    conversation_id: Annotated[str, Path(description="Conversation identifier", min_length=1)],
     idempotency_key: Annotated[
         str,
         Header(alias="Idempotency-Key", min_length=1),
@@ -75,10 +73,7 @@ async def submit_message(
     except ConversationBusy as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"A job is already running on this conversation: "
-                f"{exc.existing_job.job_id}"
-            ),
+            detail=(f"A job is already running on this conversation: {exc.existing_job.job_id}"),
         ) from exc
 
     return SubmitMessageResponse(job_id=job.job_id)

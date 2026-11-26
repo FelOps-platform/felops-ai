@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -30,10 +28,21 @@ class PromptSeed:
 SEEDS = [
     PromptSeed(S.PLATFORM, "persona", "platform-default"),
     PromptSeed(S.PLATFORM_SUB_AGENT, "persona", "platform-cs", sub_agent_id="customer_support"),
-    PromptSeed(S.WORKSPACE_SUB_AGENT, "persona", "acme-cs",
-               workspace_id="acme", sub_agent_id="customer_support"),
-    PromptSeed(S.WORKSPACE_AGENT_SUB_AGENT, "persona", "acme-agent1-cs",
-               workspace_id="acme", agent_id="agent_1", sub_agent_id="customer_support"),
+    PromptSeed(
+        S.WORKSPACE_SUB_AGENT,
+        "persona",
+        "acme-cs",
+        workspace_id="acme",
+        sub_agent_id="customer_support",
+    ),
+    PromptSeed(
+        S.WORKSPACE_AGENT_SUB_AGENT,
+        "persona",
+        "acme-agent1-cs",
+        workspace_id="acme",
+        agent_id="agent_1",
+        sub_agent_id="customer_support",
+    ),
 ]
 
 
@@ -89,6 +98,4 @@ class PromptStoreContract:
         assert isinstance(store.resolve("persona", ctx(run_id="run-123")), PromptVersion)
 
     def test_node_is_context_not_a_resolution_key(self, store):
-        assert store.resolve("persona", ctx()) == store.resolve(
-            "persona", ctx(node="triage")
-        )
+        assert store.resolve("persona", ctx()) == store.resolve("persona", ctx(node="triage"))

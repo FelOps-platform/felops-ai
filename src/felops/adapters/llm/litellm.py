@@ -485,13 +485,13 @@ class LiteLLMProvider:
 
 def _parse_tool_calls(message: Any) -> tuple[LLMToolCall, ...]:
     return tuple(
-            _build_tool_call(
-                _get(tc, "id") or "",
-                _get(_get(tc, "function"), "name") or "",
-                _get(_get(tc, "function"), "arguments"),
-            )
-            for tc in _get(message, "tool_calls") or []
+        _build_tool_call(
+            _get(tc, "id") or "",
+            _get(_get(tc, "function"), "name") or "",
+            _get(_get(tc, "function"), "arguments"),
         )
+        for tc in _get(message, "tool_calls") or []
+    )
 
 
 def _pick_model(resp: Any, routed_model: str) -> str:

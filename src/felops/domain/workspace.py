@@ -11,9 +11,14 @@ from pydantic import BaseModel, Field
 
 
 class WorkspaceContext(BaseModel, frozen=True):
-    """Immutable workspace identity, propagated everywhere """
+    """Immutable workspace identity, propagated everywhere"""
 
     workspace_id: str = Field(min_length=1)
+
+
+def make_thread_id(workspace_id: str, conversation_id: str) -> str:
+    """Return the canonical domain thread identifier."""
+    return f"{workspace_id}:{conversation_id}"
 
 
 class NameSpace(BaseModel, frozen=True):

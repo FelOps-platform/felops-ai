@@ -138,9 +138,7 @@ async def test_list_tools_rebuilds_full_tool_specs(connector: McpConnector) -> N
 
 
 @pytest.mark.asyncio
-async def test_call_forwards_idem_key_and_workspace(
-    connector: McpConnector, mcp_app: Any
-) -> None:
+async def test_call_forwards_idem_key_and_workspace(connector: McpConnector, mcp_app: Any) -> None:
     await connector.call("lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-42")
 
     call = mcp_app.state.mock_mcp.calls[-1]
@@ -150,9 +148,7 @@ async def test_call_forwards_idem_key_and_workspace(
 
 
 @pytest.mark.asyncio
-async def test_session_is_created_once_per_workspace(
-    connector: McpConnector, mcp_app: Any
-) -> None:
+async def test_session_is_created_once_per_workspace(connector: McpConnector, mcp_app: Any) -> None:
     await connector.list_tools(_WS1)
     await connector.call("lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1")
     await connector.list_tools(_WS2)

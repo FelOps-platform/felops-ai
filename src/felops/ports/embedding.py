@@ -23,7 +23,7 @@ class EmbeddingModel(Protocol):
         namespace-per-model versioning so a model change triggers re-indexing.
     `dim` : int
         Dimensionality of the dense output vector.
-    
+
     Methods
     -------
     `embed_documents`
