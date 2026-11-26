@@ -119,37 +119,8 @@ class McpConnector:
         disconnected connector yields an empty list (§4.2): the executor then
         denies every call and hands off instead of raising.
         """
-        specs: list[ToolSpec] = []
         try:
-            cursor: str | None = None
-            seen: set[str] = set()
-            for _ in range(_MAX_TOOL_PAGES):
-                params = {"cursor": cursor} if cursor else {}
-                result = await self._request(ctx, "tools/list", params)
-                tools = result.get("tools")
-                if isinstance(tools, list):
-                    for tool in tools:
-                        if isinstance(tool, Mapping):
-                            spec = self._to_spec(tool)
-                            if spec is not None:
-                                specs.append(spec)
-                next_cursor = result.get("nextCursor")
-                if not isinstance(next_cursor, str) or not next_cursor:
-                    return specs
-                if next_cursor in seen:
-                    logger.warning(
-                        "mcp tools/list repeated cursor %r for workspace %s",
-                        next_cursor,
-                        ctx.workspace_id,
-                    )
-                    return specs
-                seen.add(next_cursor)
-                cursor = next_cursor
-            logger.warning(
-                "mcp tools/list stopped after %d pages for workspace %s",
-                _MAX_TOOL_PAGES,
-                ctx.workspace_id,
-            )
+            return await self._load_tool_pages(ctx)
         except _McpFailure as exc:
             logger.warning(
                 "mcp tools/list failed for workspace %s: %s",
@@ -157,7 +128,34 @@ class McpConnector:
                 exc.error.message,
             )
             return []
+
+    async def _load_tool_pages(self, ctx: WorkspaceContext) -> list[ToolSpec]:
+        specs: list[ToolSpec] = []
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _ in range(_MAX_TOOL_PAGES):
+            result = await self._request(
+                ctx, "tools/list", {"cursor": cursor} if cursor else {}
+            )
+            self._append_specs(specs, result.get("tools"))
+            cursor = _next_cursor(result, seen)
+            if cursor is None:
+                return specs
+        logger.warning(
+            "mcp tools/list stopped after %d pages for workspace %s",
+            _MAX_TOOL_PAGES,
+            ctx.workspace_id,
+        )
         return specs
+
+    def _append_specs(self, specs: list[ToolSpec], tools: Any) -> None:
+        if not isinstance(tools, list):
+            return
+        for tool in tools:
+            if isinstance(tool, Mapping):
+                spec = self._to_spec(tool)
+                if spec is not None:
+                    specs.append(spec)
 
     async def call(
         self,
@@ -251,11 +249,10 @@ class McpConnector:
             "Accept": "application/json, text/event-stream",
             WORKSPACE_HEADER: ctx.workspace_id,
         }
-        if session is not None:
-            if session.session_id:
-                headers[SESSION_HEADER] = session.session_id
-            if session.protocol_version:
-                headers[PROTOCOL_HEADER] = session.protocol_version
+        if session is not None and session.session_id:
+            headers[SESSION_HEADER] = session.session_id
+        if session is not None and session.protocol_version:
+            headers[PROTOCOL_HEADER] = session.protocol_version
         return headers
 
     async def _request(
@@ -282,20 +279,36 @@ class McpConnector:
         params: Mapping[str, Any],
         session: _Session | None,
     ) -> tuple[dict[str, Any], httpx.Headers]:
-        client = self._client_or_create()
+        body = self._request_body(method, params)
+        response = await self._send(ctx, session, body)
+        if response.status_code >= 400:
+            raise _McpFailure(
+                _rpc_error_from_response(response), status_code=response.status_code
+            )
+        payload = self._decode_payload(response, body["id"], method)
+        return payload, response.headers
+
+    def _request_body(self, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
         self._request_seq += 1
-        request_id = self._request_seq
-        body: dict[str, Any] = {
+        return {
             "jsonrpc": "2.0",
-            "id": request_id,
+            "id": self._request_seq,
             "method": method,
             "params": dict(params),
         }
+
+    async def _send(
+        self,
+        ctx: WorkspaceContext,
+        session: _Session | None,
+        body: Mapping[str, Any],
+    ) -> httpx.Response:
         try:
-            response = await client.post(
+            return await self._client_or_create().post(
                 self._endpoint, json=body, headers=self._headers(ctx, session)
             )
         except httpx.TimeoutException as exc:
+            method = body.get("method")
             raise _McpFailure(
                 _tool_error(
                     "provider_error",
@@ -311,11 +324,10 @@ class McpConnector:
                 )
             ) from exc
 
-        if response.status_code >= 400:
-            raise _McpFailure(
-                _rpc_error_from_response(response), status_code=response.status_code
-            )
-
+    @staticmethod
+    def _decode_payload(
+        response: httpx.Response, request_id: int, method: str
+    ) -> dict[str, Any]:
         try:
             payload = _decode_json_rpc(response, request_id)
         except (ValueError, json.JSONDecodeError) as exc:
@@ -336,7 +348,7 @@ class McpConnector:
             raise _McpFailure(
                 _tool_error("provider_error", f"MCP method '{method}' returned no result")
             )
-        return result, response.headers
+        return result
 
     # -- Result mapping -----------------------------------------------------
 
@@ -344,61 +356,68 @@ class McpConnector:
         name = tool.get("name")
         if not isinstance(name, str) or not name:
             return None
-        meta = tool.get("_meta")
-        felops_meta = meta.get("felops") if isinstance(meta, Mapping) else None
-        published = felops_meta if isinstance(felops_meta, Mapping) else {}
-
-        tool_id = published.get("tool_id") or name
-        connector_id = published.get("connector_id") or self._connector_id
-        if not connector_id:
-            connector_id = _DEFAULT_CONNECTOR_ID
-        parameters = tool.get("inputSchema")
-        effect_summary = published.get("effect_summary")
         try:
-            return ToolSpec(
-                tool_id=str(tool_id),
-                connector_id=str(connector_id),
-                description=str(tool.get("description") or ""),
-                parameters=dict(parameters) if isinstance(parameters, Mapping) else {},
-                result_summary=str(published.get("result_summary") or ""),
-                effect_summary=effect_summary,
-                version=int(published.get("version") or 1),
-                deprecated=bool(published.get("deprecated", False)),
-            )
+            return _tool_spec_from_mcp(tool, name, self._connector_id)
         except (ValidationError, TypeError, ValueError) as exc:
             logger.warning("skipping malformed MCP tool descriptor %r: %s", name, exc)
             return None
 
     @staticmethod
     def _to_tool_result(result: Mapping[str, Any]) -> ToolResult:
-        envelope = result.get("structuredContent")
+        envelope = _extract_envelope(result)
+        if bool(result.get("isError")):
+            return _error_result(result, envelope)
         if not isinstance(envelope, Mapping):
-            envelope = _parse_text_content(result.get("content"))
-        is_error = bool(result.get("isError"))
-
-        if is_error:
-            text = _content_text(result.get("content"))
-            if isinstance(envelope, Mapping):
-                return _failure_from_envelope(envelope, fallback_message=text)
-            return ToolResult(
-                status="failed",
-                data=None,
-                error=_tool_error("provider_error", text or "MCP tool call failed"),
-            )
-
-        if isinstance(envelope, Mapping):
-            if _is_execution_envelope(envelope) and envelope.get("status") == "failed":
+            return ToolResult(status="succeeded", data={"result": dict(result)}, error=None)
+        if _is_execution_envelope(envelope):
+            if envelope.get("status") == "failed":
                 return _failure_from_envelope(envelope)
-            if _is_execution_envelope(envelope):
-                data = envelope.get("data")
-                return ToolResult(
-                    status="succeeded",
-                    data=dict(data) if isinstance(data, Mapping) else None,
-                    error=None,
-                )
-            return ToolResult(status="succeeded", data=dict(envelope), error=None)
+            return _success_from_envelope(envelope)
+        return ToolResult(status="succeeded", data=dict(envelope), error=None)
 
-        return ToolResult(status="succeeded", data={"result": dict(result)}, error=None)
+
+def _next_cursor(result: Mapping[str, Any], seen: set[str]) -> str | None:
+    """Return the next page cursor, or ``None`` when the page was the last."""
+    cursor = result.get("nextCursor")
+    if not isinstance(cursor, str) or not cursor:
+        return None
+    if cursor in seen:
+        logger.warning("mcp tools/list repeated cursor %r", cursor)
+        return None
+    seen.add(cursor)
+    return cursor
+
+
+def _published_metadata(tool: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return the catalog metadata a server publishes under ``_meta.felops``."""
+    meta = tool.get("_meta")
+    felops_meta = meta.get("felops") if isinstance(meta, Mapping) else None
+    return felops_meta if isinstance(felops_meta, Mapping) else {}
+
+
+def _tool_spec_from_mcp(
+    tool: Mapping[str, Any], name: str, fallback_connector_id: str | None
+) -> ToolSpec:
+    """Build a ``ToolSpec`` from an MCP ``Tool`` descriptor.
+
+    Raises ``ValidationError``/``TypeError``/``ValueError`` for a malformed
+    descriptor; the caller skips that tool instead of failing discovery.
+    """
+    published = _published_metadata(tool)
+    connector_id = (
+        published.get("connector_id") or fallback_connector_id or _DEFAULT_CONNECTOR_ID
+    )
+    parameters = tool.get("inputSchema")
+    return ToolSpec(
+        tool_id=str(published.get("tool_id") or name),
+        connector_id=str(connector_id),
+        description=str(tool.get("description") or ""),
+        parameters=dict(parameters) if isinstance(parameters, Mapping) else {},
+        result_summary=str(published.get("result_summary") or ""),
+        effect_summary=published.get("effect_summary"),
+        version=int(published.get("version") or 1),
+        deprecated=bool(published.get("deprecated", False)),
+    )
 
 
 def _decode_json_rpc(response: httpx.Response, request_id: int) -> dict[str, Any]:
@@ -469,6 +488,37 @@ def _content_text(content: Any) -> str:
         and isinstance(item.get("text"), str)
     ]
     return "\n".join(parts).strip()
+
+
+def _extract_envelope(result: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return the structured payload of a tool result, if it has one."""
+    envelope = result.get("structuredContent")
+    if isinstance(envelope, Mapping):
+        return envelope
+    return _parse_text_content(result.get("content"))
+
+
+def _error_result(
+    result: Mapping[str, Any], envelope: Mapping[str, Any] | None
+) -> ToolResult:
+    """Map an ``isError`` tool result to a structured failure."""
+    text = _content_text(result.get("content"))
+    if envelope is not None:
+        return _failure_from_envelope(envelope, fallback_message=text)
+    return ToolResult(
+        status="failed",
+        data=None,
+        error=_tool_error("provider_error", text or "MCP tool call failed"),
+    )
+
+
+def _success_from_envelope(envelope: Mapping[str, Any]) -> ToolResult:
+    data = envelope.get("data")
+    return ToolResult(
+        status="succeeded",
+        data=dict(data) if isinstance(data, Mapping) else None,
+        error=None,
+    )
 
 
 def _is_execution_envelope(payload: Mapping[str, Any]) -> bool:

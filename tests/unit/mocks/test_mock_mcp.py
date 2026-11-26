@@ -52,9 +52,8 @@ def _rpc(
     params: dict[str, Any] | None = None,
     *,
     workspace: str = _WORKSPACE,
-    request_id: int = 1,
 ) -> Any:
-    body: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "method": method}
+    body: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": method}
     if params is not None:
         body["params"] = params
     return client.post("/mcp", json=body, headers={WORKSPACE_HEADER: workspace})
@@ -72,7 +71,6 @@ def _call(
     arguments: dict[str, Any],
     *,
     workspace: str = _WORKSPACE,
-    idem_key: str = "idem-1",
 ) -> Any:
     return _rpc(
         client,
@@ -80,7 +78,7 @@ def _call(
         {
             "name": tool_id,
             "arguments": arguments,
-            "_meta": {IDEM_KEY_META: idem_key},
+            "_meta": {IDEM_KEY_META: "idem-1"},
         },
         workspace=workspace,
     )
@@ -187,7 +185,15 @@ def test_tools_call_returns_the_catalog_example(client: TestClient) -> None:
 
 
 def test_tools_call_records_the_forwarded_idem_key(client: TestClient) -> None:
-    _call(client, "lookup_order", {"order_number": "#1042"}, idem_key="idem-forwarded")
+    _rpc(
+        client,
+        "tools/call",
+        {
+            "name": "lookup_order",
+            "arguments": {"order_number": "#1042"},
+            "_meta": {IDEM_KEY_META: "idem-forwarded"},
+        },
+    )
 
     call = client.app.state.mock_mcp.calls[-1]
     assert call["idem_key"] == "idem-forwarded"
