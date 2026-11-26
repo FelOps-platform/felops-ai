@@ -12,12 +12,13 @@ executor's ledger and the backend, not to this port.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from felops.domain.tools import ToolResult, ToolSpec
 from felops.domain.workspace import WorkspaceContext
 
 
+@runtime_checkable
 class Connector(Protocol):
     """Async tool connector.
 

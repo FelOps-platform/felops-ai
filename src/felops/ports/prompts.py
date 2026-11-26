@@ -33,6 +33,12 @@ class PromptContext:
     run_id: str | None = None
     node: str | None = None
 
+    def __post_init__(self) -> None:
+        for field_name in ("workspace_id", "agent_id", "sub_agent_id"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or len(value) < 1:
+                raise ValueError(f"PromptContext.{field_name} must be a non-empty string")
+
 
 @dataclass(frozen=True, slots=True)
 class PromptVersion:

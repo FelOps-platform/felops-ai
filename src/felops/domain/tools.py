@@ -9,12 +9,14 @@ Tool and action are the same item — ``tool_id`` is the single stable identifie
 ``status="succeeded"`` with ``data`` or ``status="failed"`` with a structured
 ``ToolError`` (including ``connector_not_connected``).  Neither type performs I/O.
 
-``effective_tools(P, S)`` (P1, task 1.11) also lives in the domain layer and
-will join this module when the Tool Registry lands.
+``effective_tools(P, S)`` (task 1.11) lives here too: the effective set is a
+pure function of the sub-agent manifest ``P`` and the user's selection ``S``,
+never an input field (§4.1 invariant 7).
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -61,6 +63,30 @@ class ToolSpec(BaseModel, frozen=True):
         return self.effect_summary is not None
 
 
+def effective_tools(
+    predefined_tool_ids: Iterable[str],
+    selected_tool_ids: Iterable[str],
+) -> frozenset[str]:
+    """Return the effective tool set ``E = P ∩ S`` (§4.1 invariant 7).
+
+    ``P`` is the active sub-agent's predefined manifest, ``S`` the user's
+    agent-level selection.  The function is pure — no I/O, no catalog lookup,
+    no policy — and derives ``E`` every time instead of trusting an input
+    field.  An id absent from either side can never be effective:
+
+    * selecting a tool the sub-agent does not hold keeps it out of ``E``
+      (the Tool Registry reports ``tool_unreachable`` separately);
+    * dropping a tool from ``S`` revokes it immediately;
+    * an id in neither set never appears.
+
+    The result is a ``frozenset`` because ``E`` is a set: the contract is
+    membership, ``E ⊆ P``, ``E ⊆ S``, monotonicity in ``S`` and idempotence.
+    Callers that render tools sort the result by the catalog so display order
+    stays deterministic without making order part of this function.
+    """
+    return frozenset(predefined_tool_ids).intersection(selected_tool_ids)
+
+
 class ToolError(BaseModel, frozen=True):
     """Structured error returned on a failed tool execution (§4.2).
 
@@ -95,4 +121,6 @@ class ToolResult(BaseModel, frozen=True):
             raise ValueError("succeeded ToolResult must not carry an error")
         if self.status == "failed" and self.error is None:
             raise ValueError("failed ToolResult must carry a structured ToolError")
+        if self.status == "failed" and self.data is not None:
+            raise ValueError("failed ToolResult must not carry data")
         return self

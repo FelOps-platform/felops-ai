@@ -78,10 +78,10 @@ class TestFilter:
         assert f.must == []
 
     def test_creation_with_conditions(self):
-        conds = [{"key": "workspace_id", "match": {"value": "ws-1"}}]
+        conds = [{"key": "language", "match": {"value": "en"}}]
         f = Filter(must=conds)
         assert len(f.must) == 1
-        assert f.must[0]["key"] == "workspace_id"
+        assert f.must[0]["key"] == "language"
 
     def test_frozen_rejects_mutation(self):
         f = Filter()
@@ -104,7 +104,7 @@ class TestHybridQuery:
 
     def test_creation_with_filter(self):
         v = Vector(dense=[0.1])
-        flt = Filter(must=[{"key": "workspace_id", "match": {"value": "ws-1"}}])
+        flt = Filter(must=[{"key": "language", "match": {"value": "en"}}])
         q = HybridQuery(text="hello", vector=v, filter=flt)
         assert len(q.filter.must) == 1
 

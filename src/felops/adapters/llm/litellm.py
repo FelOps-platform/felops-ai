@@ -136,13 +136,24 @@ def _resolve_finish(
     return finish if finish is not None else missing
 
 
+def _freeze_value(value: Any) -> Any:
+    """Recursively freeze mutable containers so tool arguments are read-only."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _freeze_value(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
+
+
 def _build_tool_call(call_id: str, name: str, raw_args: Any) -> LLMToolCall:
     """Single place where a tool call is validated. Used by complete() and stream()."""
     if not call_id or not name:
         # A call without id/name cannot be answered with a role="tool" message.
         raise LLMError("incomplete tool call from provider", retryable=True)
     arguments = _parse_tool_arguments(raw_args)
-    return LLMToolCall(id=call_id, name=name, arguments=MappingProxyType(arguments))
+    return LLMToolCall(id=call_id, name=name, arguments=_freeze_value(arguments))
 
 
 def _parse_tool_arguments(raw_args: Any) -> dict[str, Any]:
@@ -200,6 +211,10 @@ def _optional_collection_kwargs(req: LLMRequest) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     if req.tools:
         kwargs["tools"] = [_tool_to_dict(t) for t in req.tools]
+        # litellm==1.106.4 unconditionally imports litellm.responses.mcp (which
+        # requires the optional `mcp` proxy extra) whenever `tools` is truthy.
+        # LiteLLMProvider only emits standard function tools, never proxy MCP tools.
+        kwargs["_skip_mcp_handler"] = True
     if req.stop:
         kwargs["stop"] = list(req.stop)
     if req.metadata:

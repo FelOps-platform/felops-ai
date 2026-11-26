@@ -95,7 +95,7 @@ async def _read_scores_for_id(store: MemoryStore, scope: MemoryScope, item_id: s
 class TestMemoryStoreProtocol:
     def test_is_structurally_compatible(self) -> None:
         store: MemoryStore = FakeMemoryStore()
-        assert store is not None
+        assert isinstance(store, MemoryStore)
 
 
 # ---------------------------------------------------------------------------

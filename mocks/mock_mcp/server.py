@@ -32,7 +32,7 @@ import copy
 import json
 import os
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -218,26 +218,110 @@ def _read_idem_key(params: Mapping[str, Any]) -> str:
     return ""
 
 
-def _handle_tools_call(
-    state: _MockMcpState,
-    request_id: Any,
-    params: Mapping[str, Any],
-    workspace_id: str,
-) -> JSONResponse:
-    name = params.get("name")
-    raw_arguments = params.get("arguments")
-    arguments = {} if raw_arguments is None else raw_arguments
-    if not isinstance(name, str) or not name:
-        return JSONResponse(_rpc_error(request_id, -32602, "tools/call requires a tool name"))
-    if not isinstance(arguments, Mapping):
-        return JSONResponse(
-            _rpc_error(request_id, -32602, "tools/call arguments must be an object")
-        )
+@dataclass(frozen=True)
+class _RpcCall:
+    """A validated JSON-RPC request routed to one handler."""
 
-    envelope = state.call(workspace_id, name, arguments, _read_idem_key(params))
+    workspace_id: str
+    method: str
+    request_id: Any
+    params: Mapping[str, Any]
+
+
+def _error_response(
+    request_id: Any, code: int, message: str, *, status_code: int = 400
+) -> JSONResponse:
+    return JSONResponse(_rpc_error(request_id, code, message), status_code=status_code)
+
+
+def _is_valid_request_id(value: Any) -> bool:
+    return isinstance(value, (str, int)) and not isinstance(value, bool)
+
+
+def _parse_request(payload: Mapping[str, Any], workspace_id: str) -> _RpcCall | JSONResponse:
+    request_id = payload.get("id")
+    if payload.get("jsonrpc") != "2.0":
+        return _error_response(request_id, -32600, "Invalid Request: jsonrpc must be '2.0'")
+    method = payload.get("method")
+    if not isinstance(method, str) or not method:
+        return _error_response(request_id, -32600, "Invalid Request: method is required")
+    if "id" in payload and not _is_valid_request_id(request_id):
+        return _error_response(None, -32600, "Invalid Request: id must be a string or integer")
+    raw_params = payload.get("params")
+    params = {} if raw_params is None else raw_params
+    if not isinstance(params, dict):
+        return _error_response(request_id, -32602, "Invalid params")
+    return _RpcCall(
+        workspace_id=workspace_id,
+        method=method,
+        request_id=request_id,
+        params=params,
+    )
+
+
+def _check_session(state: _MockMcpState, call: _RpcCall, session_id: str) -> JSONResponse | None:
+    if call.method == "initialize" or not session_id:
+        return None
+    session_workspace = state.sessions.get(session_id)
+    if session_workspace is None:
+        return _error_response(call.request_id, -32000, "Unknown MCP session", status_code=404)
+    if session_workspace != call.workspace_id:
+        return _error_response(
+            call.request_id,
+            -32000,
+            "MCP session belongs to another workspace",
+            status_code=403,
+        )
+    return None
+
+
+def _handle_initialize(state: _MockMcpState, call: _RpcCall) -> JSONResponse:
+    session_id = uuid.uuid4().hex
+    state.sessions[session_id] = call.workspace_id
+    state.initializations += 1
     return JSONResponse(
         _rpc_result(
-            request_id,
+            call.request_id,
+            {
+                "protocolVersion": state.protocol_version,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+            },
+        ),
+        headers={SESSION_HEADER: session_id},
+    )
+
+
+def _handle_ping(_state: _MockMcpState, call: _RpcCall) -> JSONResponse:
+    return JSONResponse(_rpc_result(call.request_id, {}))
+
+
+def _handle_tools_list(state: _MockMcpState, call: _RpcCall) -> JSONResponse:
+    return JSONResponse(
+        _rpc_result(call.request_id, {"tools": state.list_tools(call.workspace_id)})
+    )
+
+
+def _handle_tools_call(state: _MockMcpState, call: _RpcCall) -> JSONResponse:
+    name = call.params.get("name")
+    raw_arguments = call.params.get("arguments")
+    arguments = {} if raw_arguments is None else raw_arguments
+    if not isinstance(name, str) or not name:
+        return _error_response(
+            call.request_id, -32602, "tools/call requires a tool name", status_code=200
+        )
+    if not isinstance(arguments, Mapping):
+        return _error_response(
+            call.request_id,
+            -32602,
+            "tools/call arguments must be an object",
+            status_code=200,
+        )
+
+    envelope = state.call(call.workspace_id, name, arguments, _read_idem_key(call.params))
+    return JSONResponse(
+        _rpc_result(
+            call.request_id,
             {
                 "content": [{"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}],
                 "structuredContent": envelope,
@@ -247,6 +331,26 @@ def _handle_tools_call(
     )
 
 
+_HANDLERS: dict[str, Callable[[_MockMcpState, _RpcCall], JSONResponse]] = {
+    "initialize": _handle_initialize,
+    "ping": _handle_ping,
+    "tools/list": _handle_tools_list,
+    "tools/call": _handle_tools_call,
+}
+
+
+def _dispatch(state: _MockMcpState, call: _RpcCall) -> JSONResponse:
+    handler = _HANDLERS.get(call.method)
+    if handler is None:
+        return _error_response(
+            call.request_id,
+            -32601,
+            f"Method not found: {call.method}",
+            status_code=200,
+        )
+    return handler(state, call)
+
+
 async def handle_rpc(request: Request) -> Response:
     """Single JSON-RPC request handler for ``POST /mcp``."""
     state: _MockMcpState = request.app.state.mock_mcp
@@ -254,89 +358,28 @@ async def handle_rpc(request: Request) -> Response:
     try:
         payload = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return JSONResponse(_rpc_error(None, -32700, "Parse error"), status_code=400)
+        return _error_response(None, -32700, "Parse error")
     if not isinstance(payload, dict):
-        return JSONResponse(
-            _rpc_error(None, -32600, "Invalid Request: batched requests are not supported"),
-            status_code=400,
-        )
+        return _error_response(None, -32600, "Invalid Request: batched requests are not supported")
 
     workspace_id = request.headers.get(WORKSPACE_HEADER, "").strip()
     if not workspace_id:
-        return JSONResponse(
-            _rpc_error(payload.get("id"), -32602, f"Missing {WORKSPACE_HEADER} header"),
-            status_code=400,
-        )
+        return _error_response(payload.get("id"), -32602, f"Missing {WORKSPACE_HEADER} header")
 
-    method = payload.get("method")
-    request_id = payload.get("id")
-    if payload.get("jsonrpc") != "2.0":
-        return JSONResponse(
-            _rpc_error(request_id, -32600, "Invalid Request: jsonrpc must be '2.0'"),
-            status_code=400,
-        )
-    if not isinstance(method, str) or not method:
-        return JSONResponse(
-            _rpc_error(request_id, -32600, "Invalid Request: method is required"),
-            status_code=400,
-        )
-    if "id" in payload and not (
-        isinstance(request_id, (str, int)) and not isinstance(request_id, bool)
-    ):
-        return JSONResponse(
-            _rpc_error(None, -32600, "Invalid Request: id must be a string or integer"),
-            status_code=400,
-        )
+    call = _parse_request(payload, workspace_id)
+    if isinstance(call, JSONResponse):
+        return call
 
-    session_id = request.headers.get(SESSION_HEADER, "").strip()
-    if method != "initialize" and session_id:
-        session_workspace = state.sessions.get(session_id)
-        if session_workspace is None:
-            return JSONResponse(
-                _rpc_error(request_id, -32000, "Unknown MCP session"), status_code=404
-            )
-        if session_workspace != workspace_id:
-            return JSONResponse(
-                _rpc_error(request_id, -32000, "MCP session belongs to another workspace"),
-                status_code=403,
-            )
+    session_error = _check_session(state, call, request.headers.get(SESSION_HEADER, "").strip())
+    if session_error is not None:
+        return session_error
 
     # MCP notifications (e.g. notifications/initialized) carry no id and get
     # an empty 202, exactly as a real streamable-HTTP server answers.
     if "id" not in payload:
         return Response(status_code=202)
 
-    raw_params = payload.get("params")
-    params = {} if raw_params is None else raw_params
-    if not isinstance(params, dict):
-        return JSONResponse(_rpc_error(request_id, -32602, "Invalid params"))
-
-    if method == "initialize":
-        session_id = uuid.uuid4().hex
-        state.sessions[session_id] = workspace_id
-        state.initializations += 1
-        return JSONResponse(
-            _rpc_result(
-                request_id,
-                {
-                    "protocolVersion": state.protocol_version,
-                    "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-                },
-            ),
-            headers={SESSION_HEADER: session_id},
-        )
-
-    if method == "ping":
-        return JSONResponse(_rpc_result(request_id, {}))
-
-    if method == "tools/list":
-        return JSONResponse(_rpc_result(request_id, {"tools": state.list_tools(workspace_id)}))
-
-    if method == "tools/call":
-        return _handle_tools_call(state, request_id, params, workspace_id)
-
-    return JSONResponse(_rpc_error(request_id, -32601, f"Method not found: {method}"))
+    return _dispatch(state, call)
 
 
 # ---------------------------------------------------------------------------
