@@ -203,41 +203,60 @@ Enforcement:
 ### 5.1 Interface boundaries
 
 ```python
-class LLMProvider(Protocol):          # openai | anthropic | gemini | local
-    capabilities: ProviderCaps        # tools, json_mode, max_ctx
+class LLMProvider(Protocol):  # openai | anthropic | gemini | local
+    capabilities: ProviderCaps  # tools, json_mode, max_ctx
+
     async def complete(self, req: LLMRequest) -> LLMResponse: ...
     def stream(self, req: LLMRequest) -> AsyncIterator[LLMChunk]: ...
 
-class VectorStore(Protocol):          # qdrant | pgvector | weaviate | pinecone
+
+class VectorStore(Protocol):  # qdrant | pgvector | weaviate | pinecone
     async def upsert(self, ns: NameSpace, items: list[VectorItem]) -> None: ...
     async def search(self, ns: NameSpace, q: HybridQuery, k: int) -> list[Hit]: ...
     async def delete(self, ns: NameSpace, flt: Filter) -> int: ...
 
+
 class EmbeddingModel(Protocol):
-    model_id: str; dim: int
+    model_id: str
+    dim: int
+
     async def embed_documents(self, texts: list[str]) -> list[Vector]: ...
     async def embed_query(self, text: str) -> Vector: ...
 
-class PromptStore(Protocol):          # versioned, per-workspace, per-agent, per-sub-agent
-    def resolve(self, name: str, ctx: PromptContext) -> PromptVersion: ...   # ctx.agent_id, ctx.sub_agent_id
 
-class RetrievalStrategy(Protocol):    # dense | hybrid_rrf | hybrid_rerank | graph (later)
+class PromptStore(Protocol):  # versioned, per-workspace, per-agent, per-sub-agent
+    def resolve(
+        self, name: str, ctx: PromptContext
+    ) -> PromptVersion: ...  # ctx.agent_id, ctx.sub_agent_id
+
+
+class RetrievalStrategy(Protocol):  # dense | hybrid_rrf | hybrid_rerank | graph (later)
     async def retrieve(self, q: Query, ctx: WorkspaceCtx) -> list[Chunk]: ...
 
-class Connector(Protocol):            # MCP server, REST connector, native SDK
-    async def list_tools(self, ctx: WorkspaceCtx) -> list[ToolSpec]: ...
-    async def call(self, tool: str, args: dict, ctx: WorkspaceCtx, idem_key: str | None = None) -> ToolResult: ...  # idem_key set iff side-effecting; reads pass None (§5.4)
 
-class MemoryStore(Protocol):          # postgres | redis | vector-backed
+class Connector(Protocol):  # MCP server, REST connector, native SDK
+    async def list_tools(self, ctx: WorkspaceCtx) -> list[ToolSpec]: ...
+    async def call(
+        self, tool: str, args: dict, ctx: WorkspaceCtx, idem_key: str | None = None
+    ) -> ToolResult: ...  # idem_key set iff side-effecting; reads pass None (§5.4)
+
+
+class MemoryStore(Protocol):  # postgres | redis | vector-backed
     async def read(self, scope: MemoryScope, q: str | None) -> list[MemoryItem]: ...
     async def write(self, scope: MemoryScope, items: list[MemoryItem]) -> None: ...
 
-class SubAgentRegistry(Protocol):     # file manifests (V1) | db-backed (later)
-    def get(self, sub_agent_id: str) -> SubAgentSpec: ...   # sub_agent_id, audience, predefined_tool_ids, persona refs
+
+class SubAgentRegistry(Protocol):  # file manifests (V1) | db-backed (later)
+    def get(
+        self, sub_agent_id: str
+    ) -> SubAgentSpec: ...  # sub_agent_id, audience, predefined_tool_ids, persona refs
     def enabled(self, ctx: WorkspaceCtx) -> list[SubAgentSpec]: ...
 
-class SubAgentResolver(Protocol):     # static (V1) | channel_audience (later)
-    def resolve(self, req: ResolveRequest, ctx: WorkspaceCtx) -> AgentRef: ...  # agent_id, channel, thread -> AgentRef
+
+class SubAgentResolver(Protocol):  # static (V1) | channel_audience (later)
+    def resolve(
+        self, req: ResolveRequest, ctx: WorkspaceCtx
+    ) -> AgentRef: ...  # agent_id, channel, thread -> AgentRef
 ```
 
 ### 5.2 Selection by config
@@ -283,16 +302,18 @@ sub_agents: {enabled: [customer_support], resolver: static}
 ```python
 class AgentState(TypedDict):
     workspace_id: str
-    agent_id: str                         # the user-created agent, supplied by the backend
-    sub_agent_id: str                     # V1: "customer_support"; set at ingress, pinned
-    audience: Literal["external", "internal"]   # V1: "external"
-    channel: str                          # whatsapp | widget | hosted | api (later: employee portal)
+    agent_id: str  # the user-created agent, supplied by the backend
+    sub_agent_id: str  # V1: "customer_support"; set at ingress, pinned
+    audience: Literal["external", "internal"]  # V1: "external"
+    channel: str  # whatsapp | widget | hosted | api (later: employee portal)
     conversation_id: str
     config_version: str
     messages: Annotated[list[Message], add_messages]
-    plan: Plan | None                     # steps, deps, cursor
+    plan: Plan | None  # steps, deps, cursor
     retrieved_context: list[Chunk]
-    tool_calls: list[ToolCall]            # proposed + executed, with params_hash; idem_key only on side-effecting calls
+    tool_calls: list[
+        ToolCall
+    ]  # proposed + executed, with params_hash; idem_key only on side-effecting calls
     pending_approvals: list[Approval]
     execution_trace: Annotated[list[TraceEvent], operator.add]
     verifier_result: VerifierResult | None
