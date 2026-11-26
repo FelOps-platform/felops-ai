@@ -46,6 +46,23 @@ def _headers(idem_key: str = "key-1", token: str = "test-backend-token") -> dict
     }
 
 
+def _post_blocked_requests(
+    client: TestClient,
+    url: str,
+    idempotency_keys: tuple[str, str],
+) -> tuple[object, object]:
+    gate = threading.Event()
+    original_graph = app.state.graph
+    app.state.graph = _BlockingGraph(gate)
+    try:
+        first = client.post(url, headers=_headers(idempotency_keys[0]), json=_valid_payload())
+        second = client.post(url, headers=_headers(idempotency_keys[1]), json=_valid_payload())
+        return first, second
+    finally:
+        gate.set()
+        app.state.graph = original_graph
+
+
 def test_submit_message_returns_202(client: TestClient) -> None:
     resp = client.post(
         "/workspaces/ws-1/conversations/conv-1/messages",
@@ -142,36 +159,22 @@ def test_submit_message_whitespace_idempotency_key_returns_400(client: TestClien
 
 
 def test_conversation_busy_returns_409(client: TestClient) -> None:
-    gate = threading.Event()
-    original_graph = app.state.graph
-    app.state.graph = _BlockingGraph(gate)
-    try:
-        url = "/workspaces/ws-1/conversations/conv-busy/messages"
-        r1 = client.post(url, headers=_headers("key-busy-1"), json=_valid_payload())
-        assert r1.status_code == 202
-
-        r2 = client.post(url, headers=_headers("key-busy-2"), json=_valid_payload())
-        assert r2.status_code == 409
-    finally:
-        gate.set()
-        app.state.graph = original_graph
+    url = "/workspaces/ws-1/conversations/conv-busy/messages"
+    r1, r2 = _post_blocked_requests(client, url, ("key-busy-1", "key-busy-2"))
+    assert r1.status_code == 202
+    assert r2.status_code == 409
 
 
 def test_duplicate_idempotency_key_while_running_returns_202(client: TestClient) -> None:
-    gate = threading.Event()
-    original_graph = app.state.graph
-    app.state.graph = _BlockingGraph(gate)
-    try:
-        url = "/workspaces/ws-1/conversations/conv-dup-running/messages"
-        r1 = client.post(url, headers=_headers("key-dup-running"), json=_valid_payload())
-        assert r1.status_code == 202
-
-        r2 = client.post(url, headers=_headers("key-dup-running"), json=_valid_payload())
-        assert r2.status_code == 202
-        assert r2.json()["job_id"] == r1.json()["job_id"]
-    finally:
-        gate.set()
-        app.state.graph = original_graph
+    url = "/workspaces/ws-1/conversations/conv-dup-running/messages"
+    r1, r2 = _post_blocked_requests(
+        client,
+        url,
+        ("key-dup-running", "key-dup-running"),
+    )
+    assert r1.status_code == 202
+    assert r2.status_code == 202
+    assert r2.json()["job_id"] == r1.json()["job_id"]
 
 
 def test_response_body_matches_schema(client: TestClient) -> None:
