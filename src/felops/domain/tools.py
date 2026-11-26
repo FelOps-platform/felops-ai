@@ -12,14 +12,33 @@ Tool and action are the same item — ``tool_id`` is the single stable identifie
 ``effective_tools(P, S)`` (task 1.11) lives here too: the effective set is a
 pure function of the sub-agent manifest ``P`` and the user's selection ``S``,
 never an input field (§4.1 invariant 7).
+
+``CatalogSnapshot`` (task 1.12) is the loader schema for the full catalog the
+backend pushes as ``{"tools": [...]}``.  It intentionally carries no approval
+flag and no verifier spec: approval is per (agent, tool) in ``agent_config``,
+and verification is backend-owned (§4.1 inv. 5, §4.3).  The side-effect class
+is derived from ``effect_summary`` (§4.3).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any, Literal
+from collections.abc import Iterable, Mapping
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
+
+_NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+_CATALOG_FIELDS: tuple[str, ...] = (
+    "tool_id",
+    "connector_id",
+    "description",
+    "parameters",
+    "result_summary",
+    "effect_summary",
+    "version",
+    "deprecated",
+)
 
 
 class ToolSpec(BaseModel, frozen=True):
@@ -48,12 +67,12 @@ class ToolSpec(BaseModel, frozen=True):
         ``True`` when retired from new use (ids are never reused).
     """
 
-    tool_id: str = Field(min_length=1)
-    connector_id: str = Field(min_length=1)
+    tool_id: _NonEmptyStr
+    connector_id: _NonEmptyStr
     description: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     result_summary: str = ""
-    effect_summary: str | None = Field(default=None, min_length=1)
+    effect_summary: _NonEmptyStr | None = None
     version: int = Field(default=1, ge=1)
     deprecated: bool = False
 
@@ -124,3 +143,66 @@ class ToolResult(BaseModel, frozen=True):
         if self.status == "failed" and self.data is not None:
             raise ValueError("failed ToolResult must not carry data")
         return self
+
+
+class CatalogSnapshot(BaseModel, frozen=True):
+    """Full system-catalog snapshot as pushed by the backend (§4.3, §7).
+
+    The wire payload is exactly ``{"tools": [...]}``.  Extra keys — fixture
+    metadata such as ``examples`` or a forward-compatible field from a newer
+    backend — are ignored at both levels; unknown *tool* fields are ignored
+    too, so a backend rollout cannot break the AI service.
+
+    The snapshot adds the two invariants the domain owns:
+
+    * ``tools`` is required, so a malformed push can never silently wipe the
+      catalog;
+    * ``tool_id`` is unique, because ids are stable primary keys for policy,
+      events and ``agent_config`` (§4.1 inv. 8).
+
+    It deliberately carries no approval flag and no verifier spec: approval is
+    per (agent, tool) in ``agent_config``, and verification is backend-owned
+    (§4.1 inv. 5, §4.3).  The side-effect class comes from ``effect_summary``.
+    """
+
+    tools: tuple[ToolSpec, ...]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_full_entries(cls, data: Any) -> Any:
+        """Reject partial entries before defaults can hide a broken push.
+
+        ``ToolSpec`` has defaults for connector-side discovery, but the
+        backend's catalog contract (§4.3) is the full eight-field entry.  A
+        summary payload from ``GET /catalog?full=false``, or an entry missing
+        ``effect_summary``, would otherwise default to read-only and fail open
+        in preview.
+        """
+        if not isinstance(data, Mapping):
+            return data
+        tools = data.get("tools")
+        if not isinstance(tools, (list, tuple)):
+            return data
+        for index, tool in enumerate(tools):
+            if not isinstance(tool, Mapping):
+                continue
+            missing = [field for field in _CATALOG_FIELDS if field not in tool]
+            if missing:
+                raise ValueError(
+                    f"catalog entry {index} is missing required field(s): "
+                    f"{', '.join(missing)}"
+                )
+        return data
+
+    @model_validator(mode="after")
+    def _check_unique_tool_ids(self) -> CatalogSnapshot:
+        seen: set[str] = set()
+        for tool in self.tools:
+            if tool.tool_id in seen:
+                raise ValueError(f"duplicate tool_id in catalog: {tool.tool_id}")
+            seen.add(tool.tool_id)
+        return self
+
+    def get(self, tool_id: str) -> ToolSpec | None:
+        """Return the catalog entry for *tool_id*, or ``None`` when absent."""
+        return next((tool for tool in self.tools if tool.tool_id == tool_id), None)
