@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
@@ -24,6 +24,7 @@ from tests.unit.ports.test_connector_contract import (
 )
 
 from felops.adapters.connector.mcp import McpConnector
+from felops.domain.tools import ToolResult
 from felops.domain.workspace import WorkspaceContext
 
 _WS1 = WorkspaceContext(workspace_id="ws-1")
@@ -69,6 +70,22 @@ def _initialize_response(request: httpx.Request, session_id: str = "s1") -> http
 def _result_response(request: httpx.Request, result: dict[str, Any]) -> httpx.Response:
     body = _request_body(request)
     return httpx.Response(200, json={"jsonrpc": "2.0", "id": body.get("id"), "result": result})
+
+
+def _stub_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
+    """Return an adapter client backed by an in-memory transport."""
+    return httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
+    )
+
+
+async def _call_lookup(handler: Callable[[httpx.Request], httpx.Response]) -> ToolResult:
+    """Run the demo lookup through a stub server and return the outcome."""
+    async with _stub_client(handler) as client:
+        adapter = McpConnector("http://mock-mcp", client=client)
+        return await adapter.call(
+            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -200,9 +217,7 @@ async def test_session_and_protocol_headers_are_forwarded() -> None:
         seen.append(request)
         return _result_response(request, {"tools": []})
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
+    async with _stub_client(handler) as client:
         adapter = McpConnector("http://mock-mcp", client=client)
         await adapter.list_tools(_WS1)
 
@@ -233,13 +248,7 @@ async def test_expired_session_is_reinitialized_and_retried() -> None:
             {"structuredContent": {"status": "succeeded", "data": {"ok": True}, "error": None}},
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.status == "succeeded"
     assert initializations == 2
@@ -274,13 +283,7 @@ async def test_sse_response_is_decoded_after_notifications() -> None:
             headers={"Content-Type": "text/event-stream"},
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.status == "succeeded"
     assert result.data == {"order_number": "#1042"}
@@ -299,13 +302,7 @@ async def test_plain_text_tool_error_is_a_failure() -> None:
             {"content": [{"type": "text", "text": "provider exploded"}], "isError": True},
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.status == "failed"
     assert result.error is not None
@@ -323,13 +320,7 @@ async def test_structured_content_without_status_is_success() -> None:
             return httpx.Response(202)
         return _result_response(request, {"structuredContent": {"order_number": "#1042"}})
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.status == "succeeded"
     assert result.data == {"order_number": "#1042"}
@@ -348,13 +339,7 @@ async def test_json_text_content_fallback_is_decoded() -> None:
             request, {"content": [{"type": "text", "text": json.dumps(envelope)}]}
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.data == {"tracking_number": "TRK8812"}
 
@@ -376,13 +361,7 @@ async def test_json_rpc_error_on_http_200_is_a_failure() -> None:
             },
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.status == "failed"
     assert result.error is not None
@@ -403,13 +382,7 @@ async def test_http_error_retryability(status_code: int, retryable: bool) -> Non
             return httpx.Response(202)
         return httpx.Response(status_code, json={"error": {"message": "nope"}})
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.status == "failed"
     assert result.error is not None
@@ -437,9 +410,7 @@ async def test_list_tools_follows_pagination() -> None:
             },
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
+    async with _stub_client(handler) as client:
         adapter = McpConnector("http://mock-mcp", client=client)
         specs = await adapter.list_tools(_WS1)
 
@@ -469,9 +440,7 @@ async def test_malformed_descriptor_is_skipped() -> None:
             },
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
+    async with _stub_client(handler) as client:
         adapter = McpConnector("http://mock-mcp", client=client)
         specs = await adapter.list_tools(_WS1)
 
@@ -501,9 +470,7 @@ async def test_blank_effect_summary_skips_descriptor() -> None:
             },
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
+    async with _stub_client(handler) as client:
         adapter = McpConnector("http://mock-mcp", client=client)
         specs = await adapter.list_tools(_WS1)
 
@@ -523,13 +490,7 @@ async def test_status_field_without_envelope_is_not_a_failure() -> None:
             {"structuredContent": {"order_number": "#1042", "status": "shipped"}},
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.status == "succeeded"
     assert result.data == {"order_number": "#1042", "status": "shipped"}
@@ -552,13 +513,7 @@ async def test_is_error_overrides_a_succeeded_envelope() -> None:
             },
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
-        adapter = McpConnector("http://mock-mcp", client=client)
-        result = await adapter.call(
-            "lookup_order", {"order_number": "#1042"}, _WS1, idem_key="idem-1"
-        )
+    result = await _call_lookup(handler)
 
     assert result.status == "failed"
     assert result.error is not None
@@ -577,9 +532,7 @@ async def test_connector_id_falls_back_without_meta() -> None:
             request, {"tools": [{"name": "lookup_order", "description": "", "inputSchema": {}}]}
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://mock-mcp"
-    ) as client:
+    async with _stub_client(handler) as client:
         explicit = McpConnector("http://mock-mcp", connector_id="shopify", client=client)
         defaulted = McpConnector("http://mock-mcp", client=client)
         explicit_specs = await explicit.list_tools(_WS1)
