@@ -1,2 +1,15 @@
 FROM python:3.12-slim
-CMD ["python", "-m", "http.server", "9000"]
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    "fastapi==0.156.1" \
+    "uvicorn==0.54.0" \
+    "pydantic==2.14.1"
+
+COPY mocks ./mocks
+COPY fixtures ./fixtures
+
+EXPOSE 9000
+
+CMD ["uvicorn", "mocks.mock_mcp.server:app", "--host", "0.0.0.0", "--port", "9000"]
