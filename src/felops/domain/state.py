@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import operator
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from felops.domain._freeze import FrozenDict, freeze_value
 from felops.domain.agent import (
     DEFAULT_AUDIENCE,
     DEFAULT_SUB_AGENT_ID,
@@ -73,7 +75,7 @@ class AgentInstructions(BaseModel):
 class AgentToolConfig(BaseModel):
     """Tool selection S with per-tool user approval toggle."""
 
-    tool_id: str
+    tool_id: str = Field(min_length=1)
     requires_approval: bool = False
 
 
@@ -87,6 +89,50 @@ class AgentConfig(BaseModel):
     sub_agents: list[str] = Field(default_factory=lambda: ["customer_support"])
 
 
+class StrictAgentInstructions(BaseModel):
+    """Request-facing instructions schema enforcing the contract fields."""
+
+    role: str = Field(min_length=1)
+    language_constraints: str
+    response_format: str
+
+    @field_validator("role")
+    @classmethod
+    def _reject_blank_role(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("instructions.role must not be blank")
+        return value
+
+
+class StrictAgentToolConfig(BaseModel):
+    """Request-facing tool entry requiring its approval setting."""
+
+    tool_id: str = Field(min_length=1)
+    requires_approval: bool
+
+
+class StrictAgentConfig(BaseModel):
+    """Ingress schema; P1/P2 endpoints validate before setting run state."""
+
+    model_config = {"extra": "ignore"}
+
+    name: str = Field(min_length=1)
+    description: str | None = None
+    instructions: StrictAgentInstructions
+    tools: list[StrictAgentToolConfig]
+    sub_agents: list[str] = Field(default_factory=lambda: [DEFAULT_SUB_AGENT_ID])
+
+    @field_validator("name")
+    @classmethod
+    def _reject_blank_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("agent_config.name must not be blank")
+        return value
+
+    def to_agent_config(self) -> AgentConfig:
+        return AgentConfig.model_validate(self.model_dump())
+
+
 class ToolCall(BaseModel):
     """A proposed or executed tool call.
 
@@ -95,13 +141,20 @@ class ToolCall(BaseModel):
     """
 
     call_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    tool_id: str
+    tool_id: str = Field(min_length=1)
     connector_id: str | None = None
     tool_name: str = ""
     arguments: dict[str, Any] = Field(default_factory=dict)
     params_hash: str | None = None
-    idem_key: str
+    idem_key: str = Field(min_length=1)
     outcome: dict[str, Any] | None = None
+
+    @field_validator("idem_key")
+    @classmethod
+    def _reject_blank_idem_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idem_key must not be blank")
+        return value
 
 
 class ApprovalStatus(StrEnum):
@@ -124,16 +177,21 @@ class Approval(BaseModel):
     """
 
     approval_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    call_id: str
-    tool_id: str
+    call_id: str = Field(min_length=1)
+    tool_id: str = Field(min_length=1)
     action: str = ""
     integration: str = ""
-    params: dict[str, Any] = Field(default_factory=dict)
-    params_hash: str
+    params: Mapping[str, Any] = Field(default_factory=FrozenDict, frozen=True)
+    params_hash: str = Field(min_length=1)
     effect_summary: str = ""
     status: ApprovalStatus = ApprovalStatus.PENDING
     expires_at: datetime | None = None
     approver_id: str | None = None
+
+    @field_validator("params", mode="after")
+    @classmethod
+    def _freeze_params(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return freeze_value(value)
 
 
 class TraceEvent(BaseModel, frozen=True):
@@ -160,9 +218,9 @@ class AgentState(BaseModel):
     """
 
     # Identity  pinned at ingress by the submit-message use case
-    workspace_id: str
-    agent_id: str
-    sub_agent_id: str = DEFAULT_SUB_AGENT_ID
+    workspace_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1)
+    sub_agent_id: str = Field(default=DEFAULT_SUB_AGENT_ID, min_length=1)
     audience: Literal["external", "internal"] = DEFAULT_AUDIENCE
     channel: str = ""
     conversation_id: str = ""

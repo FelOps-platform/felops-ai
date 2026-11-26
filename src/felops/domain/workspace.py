@@ -7,11 +7,13 @@ baggage.  Repositories require it as a non-optional argument.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Annotated, Any
+
+from pydantic import BaseModel, BeforeValidator, Field
 
 
 class WorkspaceContext(BaseModel, frozen=True):
-    """Immutable workspace identity, propagated everywhere """
+    """Immutable workspace identity, propagated everywhere"""
 
     workspace_id: str = Field(min_length=1)
 
@@ -27,3 +29,16 @@ class NameSpace(BaseModel, frozen=True):
     workspace_id: str = Field(min_length=1)
     agent_id: str = Field(min_length=1)
     source_id: str = Field(min_length=1)
+
+
+def coerce_domain_id(value: Any) -> str:
+    """Normalize wire str or integer IDs at API ingress to canonical strings."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError("identifier must be a non-empty string or integer")
+    normalized = str(value)
+    if not normalized.strip():
+        raise ValueError("identifier must not be blank")
+    return normalized
+
+
+IngressId = Annotated[str, BeforeValidator(coerce_domain_id)]

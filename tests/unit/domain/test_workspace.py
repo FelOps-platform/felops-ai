@@ -89,3 +89,23 @@ class TestNamespace:
         a = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
         b = NameSpace(workspace_id="ws-1", agent_id="ag-1", source_id="src-1")
         assert len({a, b}) == 1
+
+
+class TestIngressId:
+    def test_accepts_string_and_integer_ids(self):
+        from pydantic import TypeAdapter
+
+        from felops.domain.workspace import IngressId
+
+        adapter = TypeAdapter(IngressId)
+        assert adapter.validate_python("ws-1") == "ws-1"
+        assert adapter.validate_python(12) == "12"
+
+    @pytest.mark.parametrize("value", [True, False, None, "", "   "])
+    def test_rejects_invalid_ids(self, value):
+        from pydantic import TypeAdapter
+
+        from felops.domain.workspace import IngressId
+
+        with pytest.raises(ValidationError):
+            TypeAdapter(IngressId).validate_python(value)

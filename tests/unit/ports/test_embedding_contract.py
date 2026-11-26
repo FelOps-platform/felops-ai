@@ -53,7 +53,7 @@ class TestEmbeddingModelProtocol:
 
     def test_is_structurally_compatible(self) -> None:
         model: EmbeddingModel = FakeEmbeddingModel()
-        assert model is not None
+        assert isinstance(model, EmbeddingModel)
 
     def test_has_model_id_attribute(self) -> None:
         model = FakeEmbeddingModel(model_id="bge-m3")
@@ -73,19 +73,17 @@ class TestEmbeddingModelContract:
     """Contract tests exercising EmbeddingModel semantics."""
 
     @pytest.fixture()
-    def model(self) -> FakeEmbeddingModel:
+    def model(self) -> EmbeddingModel:
         return FakeEmbeddingModel(dim=4)
 
     @pytest.mark.asyncio
-    async def test_embed_query_returns_vector(self, model: FakeEmbeddingModel) -> None:
+    async def test_embed_query_returns_vector(self, model: EmbeddingModel) -> None:
         vec = await model.embed_query("hello world")
         assert isinstance(vec, Vector)
         assert len(vec.dense) == model.dim
 
     @pytest.mark.asyncio
-    async def test_embed_documents_returns_list_of_vectors(
-        self, model: FakeEmbeddingModel
-    ) -> None:
+    async def test_embed_documents_returns_list_of_vectors(self, model: EmbeddingModel) -> None:
         texts = ["doc one", "doc two", "doc three"]
         vecs = await model.embed_documents(texts)
         assert len(vecs) == len(texts)
@@ -94,21 +92,17 @@ class TestEmbeddingModelContract:
             assert len(v.dense) == model.dim
 
     @pytest.mark.asyncio
-    async def test_embed_documents_empty_list(self, model: FakeEmbeddingModel) -> None:
+    async def test_embed_documents_empty_list(self, model: EmbeddingModel) -> None:
         vecs = await model.embed_documents([])
         assert vecs == []
 
     @pytest.mark.asyncio
-    async def test_embed_query_dimension_matches_dim(
-        self, model: FakeEmbeddingModel
-    ) -> None:
+    async def test_embed_query_dimension_matches_dim(self, model: EmbeddingModel) -> None:
         vec = await model.embed_query("test")
         assert len(vec.dense) == model.dim
 
     @pytest.mark.asyncio
-    async def test_embed_documents_dimension_matches_dim(
-        self, model: FakeEmbeddingModel
-    ) -> None:
+    async def test_embed_documents_dimension_matches_dim(self, model: EmbeddingModel) -> None:
         vecs = await model.embed_documents(["a", "b"])
         for v in vecs:
             assert len(v.dense) == model.dim

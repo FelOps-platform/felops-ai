@@ -95,4 +95,6 @@ class ToolResult(BaseModel, frozen=True):
             raise ValueError("succeeded ToolResult must not carry an error")
         if self.status == "failed" and self.error is None:
             raise ValueError("failed ToolResult must carry a structured ToolError")
+        if self.status == "failed" and self.data is not None:
+            raise ValueError("failed ToolResult must not carry data")
         return self

@@ -2,9 +2,9 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-felops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-felops_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-felops}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -21,7 +21,7 @@ services:
     ports:
       - "6333:6333"
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && printf 'GET /readyz HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '^HTTP/1.1 200 OK' <&3"]
       interval: 5s
       retries: 10
 
@@ -54,12 +54,14 @@ services:
   api:
     build: .
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-felops}:${POSTGRES_PASSWORD:-felops_dev}@postgres:5432/${POSTGRES_DB:-felops}}
       QDRANT_URL: http://qdrant:6333
       MOCK_MCP_URL: http://mock-mcp:9000
       BACKEND_URL: http://mock-backend:8080
       BACKEND_IDENTITY_TOKEN: ${BACKEND_IDENTITY_TOKEN:-dev_backend_token}
       AI_IDENTITY_TOKEN: ${AI_IDENTITY_TOKEN:-dev_ai_token}
+      API_KEY: ${API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
     ports:
       - "8000:8000"
     depends_on:

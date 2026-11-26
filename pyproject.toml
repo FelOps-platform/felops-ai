@@ -43,9 +43,58 @@ markers = ["live: live LLM API round-trip tests (requires API_KEY)"]
 
 [tool.importlinter]
 root_package = "felops"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Architecture layers match Design §5"
+type = "layers"
+containers = ["felops"]
+exhaustive = true
+layers = [
+    "api",
+    "app",
+    "orchestrator | services | adapters",
+    "(observability)",
+    "ports",
+    "domain",
+]
 
 [[tool.importlinter.contracts]]
 name = "Orchestrator depends only on ports and domain"
 type = "forbidden"
 source_modules = ["felops.orchestrator"]
-forbidden_modules = ["felops.adapters", "felops.api", "felops.app", "felops.services"]
+forbidden_modules = [
+    "felops.adapters",
+    "felops.api",
+    "felops.app",
+    "felops.services",
+    "felops.observability",
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "litellm",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain does not import vendor I/O or web frameworks"
+type = "forbidden"
+source_modules = ["felops.domain"]
+forbidden_modules = [
+    "httpx",
+    "fastapi",
+    "uvicorn",
+    "litellm",
+]
+
+[[tool.importlinter.contracts]]
+name = "Ports depend only on domain (no vendor or orchestration frameworks)"
+type = "forbidden"
+source_modules = ["felops.ports"]
+forbidden_modules = [
+    "httpx",
+    "fastapi",
+    "uvicorn",
+    "litellm",
+    "langchain_core",
+    "langgraph",
+]

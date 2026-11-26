@@ -38,6 +38,8 @@ class EventType(StrEnum):
     MESSAGE_FINAL = "message.final"
     USAGE_RECORDED = "usage.recorded"
     ERROR = "error"
+    JOB_COMPLETED = "job.completed"
+    INGESTION_STATUS = "ingestion.status"
 
 
 class EventEnvelope(BaseModel, frozen=True):
@@ -55,9 +57,9 @@ class EventEnvelope(BaseModel, frozen=True):
     seq: int = Field(ge=0)
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     type: EventType
-    workspace_id: str
-    agent_id: str
-    sub_agent_id: str = DEFAULT_SUB_AGENT_ID
+    workspace_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1)
+    sub_agent_id: str = Field(default=DEFAULT_SUB_AGENT_ID, min_length=1)
     conversation_id: str = ""
     job_id: str = ""
     data: dict[str, Any] = Field(default_factory=dict)

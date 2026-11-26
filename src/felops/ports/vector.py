@@ -11,12 +11,13 @@ key inside a filter is not part of the contract.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from felops.domain.retrieval_types import Filter, Hit, HybridQuery, VectorItem
 from felops.domain.workspace import NameSpace
 
 
+@runtime_checkable
 class VectorStore(Protocol):
     """Async vector-store port.
 

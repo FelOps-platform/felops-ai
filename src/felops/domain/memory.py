@@ -13,94 +13,16 @@ partition key for reads and writes:
 
 from __future__ import annotations
 
-import copy
 import json
 import uuid
-from collections.abc import Callable, Mapping
-from functools import partial
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field, ModelWrapValidatorHandler, field_validator, model_validator
 
+from felops.domain._freeze import FrozenDict, freeze_value
+
 _MEMORY_ITEM_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "felops.memory.item")
-
-
-def _immutable_metadata_error(*_args: Any, **_kwargs: Any) -> Any:
-    raise TypeError("MemoryItem.metadata is immutable")
-
-
-class _FrozenDict(dict[str, Any]):
-    """Immutable dict subclass for ``MemoryItem.metadata``."""
-
-    __setitem__ = _immutable_metadata_error
-    __delitem__ = _immutable_metadata_error
-    clear = _immutable_metadata_error
-    pop = _immutable_metadata_error
-    popitem = _immutable_metadata_error
-    setdefault = _immutable_metadata_error
-    update = _immutable_metadata_error
-    __ior__ = _immutable_metadata_error
-
-    def __reduce__(self) -> tuple[type[_FrozenDict], tuple[list[tuple[str, Any]]]]:
-        return (_FrozenDict, (list(self.items()),))
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> _FrozenDict:
-        copied = _FrozenDict(
-            (copy.deepcopy(k, memo), copy.deepcopy(v, memo)) for k, v in self.items()
-        )
-        memo[id(self)] = copied
-        return copied
-
-
-class _FrozenList(list[Any]):
-    """Immutable list subclass for nested lists inside ``MemoryItem.metadata``."""
-
-    __setitem__ = _immutable_metadata_error
-    __delitem__ = _immutable_metadata_error
-    append = _immutable_metadata_error
-    clear = _immutable_metadata_error
-    extend = _immutable_metadata_error
-    insert = _immutable_metadata_error
-    pop = _immutable_metadata_error
-    remove = _immutable_metadata_error
-    reverse = _immutable_metadata_error
-    sort = _immutable_metadata_error
-    __iadd__ = _immutable_metadata_error
-    __imul__ = _immutable_metadata_error
-
-    def __reduce__(self) -> tuple[type[_FrozenList], tuple[list[Any]]]:
-        return (_FrozenList, (list(self),))
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> _FrozenList:
-        copied = _FrozenList(copy.deepcopy(item, memo) for item in self)
-        memo[id(self)] = copied
-        return copied
-
-
-def _freeze_mapping(value: Mapping[Any, Any]) -> _FrozenDict:
-    """Recursively freeze values of a mapping into a ``_FrozenDict``."""
-    return _FrozenDict((k, _freeze_metadata_value(v)) for k, v in value.items())
-
-
-def _freeze_collection(factory: Callable[[Any], Any], value: Any) -> Any:
-    """Recursively freeze elements of an iterable using *factory*."""
-    return factory(_freeze_metadata_value(item) for item in value)
-
-
-_CONTAINER_FREEZERS: tuple[tuple[type[Any] | tuple[type[Any], ...], Callable[[Any], Any]], ...] = (
-    (Mapping, _freeze_mapping),
-    (list, partial(_freeze_collection, _FrozenList)),
-    (tuple, partial(_freeze_collection, tuple)),
-    ((set, frozenset), partial(_freeze_collection, frozenset)),
-)
-
-
-def _freeze_metadata_value(value: Any) -> Any:
-    """Recursively deep-copy and freeze mutable containers in metadata."""
-    for container_type, freezer in _CONTAINER_FREEZERS:
-        if isinstance(value, container_type):
-            return freezer(value)
-    return copy.deepcopy(value)
 
 
 def _derive_item_id(content: str, metadata: Mapping[str, Any]) -> str:
@@ -167,7 +89,7 @@ class MemoryItem(BaseModel, frozen=True):
 
     item_id: str = Field(default_factory=str, min_length=1)
     content: str = Field(min_length=1)
-    metadata: Mapping[str, Any] = Field(default_factory=_FrozenDict)
+    metadata: Mapping[str, Any] = Field(default_factory=FrozenDict)
     score: float = 0.0
 
     @field_validator("content")
@@ -180,7 +102,7 @@ class MemoryItem(BaseModel, frozen=True):
     @field_validator("metadata", mode="after")
     @classmethod
     def _freeze_metadata(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
-        return _freeze_metadata_value(value)
+        return freeze_value(value)
 
     @model_validator(mode="wrap")
     @classmethod

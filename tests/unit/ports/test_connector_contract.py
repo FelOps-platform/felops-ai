@@ -119,6 +119,8 @@ class FakeConnector:
         ctx: WorkspaceContext,
         idem_key: str,
     ) -> ToolResult:
+        if not isinstance(idem_key, str) or not idem_key.strip():
+            raise ValueError("idem_key is required for every connector call")
         self.calls.append({"tool": tool, "args": args, "ctx": ctx, "idem_key": idem_key})
 
         if tool in self._failing_tools:
@@ -153,7 +155,7 @@ class FakeConnector:
 class TestConnectorProtocol:
     def test_is_structurally_compatible(self) -> None:
         connector: Connector = FakeConnector({_WS1.workspace_id: [_READ]})
-        assert connector is not None
+        assert isinstance(connector, Connector)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +192,15 @@ class TestConnectorContract:
             ),
             _WRITE.tool_id,
         )
+
+    def test_satisfies_protocol(self, connector: Connector) -> None:
+        assert isinstance(connector, Connector)
+
+    @pytest.mark.parametrize("idem_key", ["", "   ", "\t\n"])
+    @pytest.mark.asyncio
+    async def test_blank_idem_key_is_rejected(self, connector: Connector, idem_key: str) -> None:
+        with pytest.raises(ValueError):
+            await connector.call("lookup_order", {}, _WS1, idem_key=idem_key)
 
     @pytest.mark.asyncio
     async def test_list_tools_returns_the_exposed_specs(self, connector: Connector) -> None:
@@ -282,3 +293,11 @@ class TestFakeConnectorForwarding:
         }
         assert fake.calls[1]["idem_key"] == "idem-99"
         assert fake.calls[1]["ctx"] == _WS1
+
+    @pytest.mark.parametrize("idem_key", ["", "   ", "\t\n"])
+    @pytest.mark.asyncio
+    async def test_rejected_blank_idem_key_is_not_recorded(self, idem_key: str) -> None:
+        fake = FakeConnector({_WS1.workspace_id: [_READ]})
+        with pytest.raises(ValueError):
+            await fake.call("lookup_order", {}, _WS1, idem_key=idem_key)
+        assert fake.calls == []

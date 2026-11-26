@@ -137,3 +137,12 @@ def test_tool_error_rejects_empty_code_or_message() -> None:
         ToolError(code="", message="something failed")
     with pytest.raises(ValidationError):
         ToolError(code="provider_error", message="")
+
+
+def test_tool_result_failed_rejects_non_null_data() -> None:
+    with pytest.raises(ValidationError):
+        ToolResult(
+            status="failed",
+            data={"partial": True},
+            error=ToolError(code="provider_error", message="boom"),
+        )

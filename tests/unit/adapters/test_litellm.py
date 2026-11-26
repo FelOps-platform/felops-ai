@@ -119,6 +119,7 @@ def test_complete_maps_request_and_response(monkeypatch: pytest.MonkeyPatch) -> 
     }
     assert seen["stop"] == ["END"]
     assert seen["metadata"] == {"workspace_id": "w1"}
+    assert seen["_skip_mcp_handler"] is True
     assert (seen["api_key"], seen["api_base"]) == ("k", "http://x")
     assert (out.text, out.finish_reason, out.usage.total_tokens) == ("hello", "stop", 10)
     assert out.model == "llama-3.3-70b-versatile"
@@ -138,6 +139,7 @@ def test_optional_fields_are_omitted_when_unset(monkeypatch: pytest.MonkeyPatch)
         "metadata",
         "api_key",
         "api_base",
+        "_skip_mcp_handler",
     ):
         assert key not in seen
 
@@ -212,6 +214,55 @@ def test_mapping_tool_arguments_become_read_only_mapping(monkeypatch: pytest.Mon
     assert args == {"order_id": "1042"}
     with pytest.raises(TypeError):
         args["order_id"] = "x"  # type: ignore[index]
+
+
+def test_nested_tool_arguments_are_deeply_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = '{"filters": {"status": "open"}, "items": [{"sku": "A"}]}'
+    _patch(monkeypatch, _resp(None, finish="tool_calls", tool_calls=[_tc(args=raw)]))
+    args = _complete(_provider(), _req()).tool_calls[0].arguments
+    assert args["filters"]["status"] == "open"
+    assert args["items"] == ({"sku": "A"},)
+    with pytest.raises(TypeError):
+        args["filters"]["status"] = "closed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        args["items"][0] = "x"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        args["items"][0]["sku"] = "B"  # type: ignore[index]
+
+
+def test_mapping_tool_arguments_do_not_alias_caller_nested_containers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_args: dict[str, Any] = {"filters": {"status": "open"}, "items": [{"sku": "A"}]}
+    _patch(monkeypatch, _resp(None, finish="tool_calls", tool_calls=[_tc(args=raw_args)]))
+    call = _complete(_provider(), _req()).tool_calls[0]
+    raw_args["filters"]["status"] = "closed"
+    raw_args["items"][0]["sku"] = "B"
+    raw_args["items"].append({"sku": "C"})
+    assert call.arguments["filters"]["status"] == "open"
+    assert call.arguments["items"] == ({"sku": "A"},)
+    with pytest.raises(TypeError):
+        call.arguments["filters"]["status"] = "closed"  # type: ignore[index]
+
+
+def test_streamed_tool_arguments_are_deeply_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _Stream(
+        [
+            _chunk(
+                None, tool_calls=[_delta(id="c1", name="lookup", args='{"filters": {"status":')]
+            ),
+            _chunk(None, tool_calls=[_delta(args=' "open"}, "items": [{"sku": "A"}]}')]),
+            _chunk(None, finish="tool_calls"),
+        ]
+    )
+    _patch(monkeypatch, s)
+    args = _stream()[-1].tool_calls[0].arguments
+    assert args["filters"]["status"] == "open"
+    assert args["items"] == ({"sku": "A"},)
+    with pytest.raises(TypeError):
+        args["filters"]["status"] = "closed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        args["items"][0]["sku"] = "B"  # type: ignore[index]
 
 
 @pytest.mark.parametrize("bad_args", ["{not json", "[1, 2]", '"text"'])
@@ -414,6 +465,14 @@ async def _drain(p: LiteLLMProvider, req: LLMRequest) -> list[LLMChunk]:
 
 def _stream(p: LiteLLMProvider | None = None, req: LLMRequest | None = None) -> list[LLMChunk]:
     return asyncio.run(_drain(p or _provider(), req or _req()))
+
+
+def test_stream_sets_skip_mcp_handler_when_tools_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _patch(monkeypatch, _Stream([_chunk(None, finish="stop")]))
+    _stream(_provider(), _req(tools=(LLMToolSpec("t", "d", {}),)))
+    assert seen["_skip_mcp_handler"] is True
 
 
 def test_stream_text_usage_and_single_final_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
