@@ -106,9 +106,7 @@ class _MockMcpState:
         self.protocol_version = config.protocol_version
 
         catalog = _load_json(self.catalog_path)
-        self.tools: dict[str, dict[str, Any]] = {
-            tool["tool_id"]: tool for tool in catalog["tools"]
-        }
+        self.tools: dict[str, dict[str, Any]] = {tool["tool_id"]: tool for tool in catalog["tools"]}
         self.examples: dict[str, dict[str, Any]] = dict(catalog.get("examples") or {})
 
         self.calls: list[dict[str, Any]] = []
@@ -240,9 +238,7 @@ def _is_valid_request_id(value: Any) -> bool:
     return isinstance(value, (str, int)) and not isinstance(value, bool)
 
 
-def _parse_request(
-    payload: Mapping[str, Any], workspace_id: str
-) -> _RpcCall | JSONResponse:
+def _parse_request(payload: Mapping[str, Any], workspace_id: str) -> _RpcCall | JSONResponse:
     request_id = payload.get("id")
     if payload.get("jsonrpc") != "2.0":
         return _error_response(request_id, -32600, "Invalid Request: jsonrpc must be '2.0'")
@@ -250,9 +246,7 @@ def _parse_request(
     if not isinstance(method, str) or not method:
         return _error_response(request_id, -32600, "Invalid Request: method is required")
     if "id" in payload and not _is_valid_request_id(request_id):
-        return _error_response(
-            None, -32600, "Invalid Request: id must be a string or integer"
-        )
+        return _error_response(None, -32600, "Invalid Request: id must be a string or integer")
     raw_params = payload.get("params")
     params = {} if raw_params is None else raw_params
     if not isinstance(params, dict):
@@ -265,16 +259,12 @@ def _parse_request(
     )
 
 
-def _check_session(
-    state: _MockMcpState, call: _RpcCall, session_id: str
-) -> JSONResponse | None:
+def _check_session(state: _MockMcpState, call: _RpcCall, session_id: str) -> JSONResponse | None:
     if call.method == "initialize" or not session_id:
         return None
     session_workspace = state.sessions.get(session_id)
     if session_workspace is None:
-        return _error_response(
-            call.request_id, -32000, "Unknown MCP session", status_code=404
-        )
+        return _error_response(call.request_id, -32000, "Unknown MCP session", status_code=404)
     if session_workspace != call.workspace_id:
         return _error_response(
             call.request_id,
@@ -328,16 +318,12 @@ def _handle_tools_call(state: _MockMcpState, call: _RpcCall) -> JSONResponse:
             status_code=200,
         )
 
-    envelope = state.call(
-        call.workspace_id, name, arguments, _read_idem_key(call.params)
-    )
+    envelope = state.call(call.workspace_id, name, arguments, _read_idem_key(call.params))
     return JSONResponse(
         _rpc_result(
             call.request_id,
             {
-                "content": [
-                    {"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}
-                ],
+                "content": [{"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}],
                 "structuredContent": envelope,
                 "isError": envelope["status"] == "failed",
             },
@@ -374,23 +360,17 @@ async def handle_rpc(request: Request) -> Response:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return _error_response(None, -32700, "Parse error")
     if not isinstance(payload, dict):
-        return _error_response(
-            None, -32600, "Invalid Request: batched requests are not supported"
-        )
+        return _error_response(None, -32600, "Invalid Request: batched requests are not supported")
 
     workspace_id = request.headers.get(WORKSPACE_HEADER, "").strip()
     if not workspace_id:
-        return _error_response(
-            payload.get("id"), -32602, f"Missing {WORKSPACE_HEADER} header"
-        )
+        return _error_response(payload.get("id"), -32602, f"Missing {WORKSPACE_HEADER} header")
 
     call = _parse_request(payload, workspace_id)
     if isinstance(call, JSONResponse):
         return call
 
-    session_error = _check_session(
-        state, call, request.headers.get(SESSION_HEADER, "").strip()
-    )
+    session_error = _check_session(state, call, request.headers.get(SESSION_HEADER, "").strip())
     if session_error is not None:
         return session_error
 

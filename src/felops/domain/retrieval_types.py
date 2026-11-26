@@ -39,7 +39,7 @@ class VectorItem(BaseModel, frozen=True):
 
     Carries the embedding and arbitrary metadata (source_id, headings,
     language, …).  The original text lives inside *payload* as ``payload["text"]``.
-    ``payload`` is untyped, so that key is not validated here.  
+    ``payload`` is untyped, so that key is not validated here.
     The ``id`` must be deterministic so that re-ingesting the same content is idempotent.
     """
 

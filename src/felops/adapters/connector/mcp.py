@@ -134,9 +134,7 @@ class McpConnector:
         cursor: str | None = None
         seen: set[str] = set()
         for _ in range(_MAX_TOOL_PAGES):
-            result = await self._request(
-                ctx, "tools/list", {"cursor": cursor} if cursor else {}
-            )
+            result = await self._request(ctx, "tools/list", {"cursor": cursor} if cursor else {})
             self._append_specs(specs, result.get("tools"))
             cursor = _next_cursor(result, seen)
             if cursor is None:
@@ -224,9 +222,7 @@ class McpConnector:
             if self._sessions.get(ctx.workspace_id) == expected:
                 self._sessions.pop(ctx.workspace_id, None)
 
-    async def _notify(
-        self, ctx: WorkspaceContext, session: _Session, method: str
-    ) -> None:
+    async def _notify(self, ctx: WorkspaceContext, session: _Session, method: str) -> None:
         client = self._client_or_create()
         try:
             await client.post(
@@ -264,9 +260,7 @@ class McpConnector:
         except _McpFailure as exc:
             if exc.status_code != 404 or session.session_id is None:
                 raise
-            logger.info(
-                "mcp session expired for workspace %s; re-initializing", ctx.workspace_id
-            )
+            logger.info("mcp session expired for workspace %s; re-initializing", ctx.workspace_id)
             await self._invalidate(ctx, session)
             session = await self._ensure_initialized(ctx)
             result, _ = await self._post_raw(ctx, method, params, session=session)
@@ -282,9 +276,7 @@ class McpConnector:
         body = self._request_body(method, params)
         response = await self._send(ctx, session, body)
         if response.status_code >= 400:
-            raise _McpFailure(
-                _rpc_error_from_response(response), status_code=response.status_code
-            )
+            raise _McpFailure(_rpc_error_from_response(response), status_code=response.status_code)
         payload = self._decode_payload(response, body["id"], method)
         return payload, response.headers
 
@@ -325,9 +317,7 @@ class McpConnector:
             ) from exc
 
     @staticmethod
-    def _decode_payload(
-        response: httpx.Response, request_id: int, method: str
-    ) -> dict[str, Any]:
+    def _decode_payload(response: httpx.Response, request_id: int, method: str) -> dict[str, Any]:
         try:
             payload = _decode_json_rpc(response, request_id)
         except (ValueError, json.JSONDecodeError) as exc:
@@ -404,9 +394,7 @@ def _tool_spec_from_mcp(
     descriptor; the caller skips that tool instead of failing discovery.
     """
     published = _published_metadata(tool)
-    connector_id = (
-        published.get("connector_id") or fallback_connector_id or _DEFAULT_CONNECTOR_ID
-    )
+    connector_id = published.get("connector_id") or fallback_connector_id or _DEFAULT_CONNECTOR_ID
     parameters = tool.get("inputSchema")
     return ToolSpec(
         tool_id=str(published.get("tool_id") or name),
@@ -498,9 +486,7 @@ def _extract_envelope(result: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return _parse_text_content(result.get("content"))
 
 
-def _error_result(
-    result: Mapping[str, Any], envelope: Mapping[str, Any] | None
-) -> ToolResult:
+def _error_result(result: Mapping[str, Any], envelope: Mapping[str, Any] | None) -> ToolResult:
     """Map an ``isError`` tool result to a structured failure."""
     text = _content_text(result.get("content"))
     if envelope is not None:

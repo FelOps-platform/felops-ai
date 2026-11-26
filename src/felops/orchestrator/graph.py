@@ -28,6 +28,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from felops.domain.state import STATE_TYPES, AgentState
+from felops.domain.workspace import make_thread_id
 from felops.orchestrator.nodes.responder import responder
 from felops.orchestrator.nodes.router import router
 
@@ -111,5 +112,5 @@ def make_thread_config(workspace_id: str, conversation_id: str) -> RunnableConfi
         config = make_thread_config("acme", "conv-42")
         graph.invoke(initial_input, config=config)
     """
-    thread_id = f"{workspace_id}:{conversation_id}"
+    thread_id = make_thread_id(workspace_id, conversation_id)
     return {"configurable": {"thread_id": thread_id}}
