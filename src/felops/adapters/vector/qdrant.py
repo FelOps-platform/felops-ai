@@ -137,22 +137,31 @@ def _point_id(ns: NameSpace, item_id: str) -> str:
     return str(uuid.uuid5(_POINT_ID_NAMESPACE, key))
 
 
-def _parse_filter_condition(condition: Any) -> dict[str, Any] | None:
-    """Validate and normalize a single payload filter condition.
-
-    Returns None for workspace_id (which is scoped from NameSpace, not Filter).
-    """
+def _extract_filter_key(condition: Any) -> str | None:
     if not isinstance(condition, dict):
         raise ValueError(f"unsupported filter condition: {condition!r}")
     key = condition.get("key")
     if not isinstance(key, str) or not key:
         raise ValueError(f"unsupported filter condition: {condition!r}")
-    if key == "workspace_id":
-        return None
+    return None if key == "workspace_id" else key
+
+
+def _extract_match_value(condition: dict[str, Any]) -> Any:
     match = condition.get("match")
     if not isinstance(match, dict) or "value" not in match:
         raise ValueError(f"unsupported filter condition: {condition!r}")
-    return {"key": key, "match": {"value": match["value"]}}
+    return match["value"]
+
+
+def _parse_filter_condition(condition: Any) -> dict[str, Any] | None:
+    """Validate and normalize a single payload filter condition.
+
+    Returns None for workspace_id (which is scoped from NameSpace, not Filter).
+    """
+    key = _extract_filter_key(condition)
+    if key is None:
+        return None
+    return {"key": key, "match": {"value": _extract_match_value(condition)}}
 
 
 def _payload_filter(ns: NameSpace, flt: Filter) -> models.Filter:
