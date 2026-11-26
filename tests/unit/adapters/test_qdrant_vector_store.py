@@ -19,7 +19,7 @@ from tests.unit.ports.test_vector_contract import (
     TestVectorStoreContract as _VectorStoreContract,
 )
 
-from felops.adapters.vector import QdrantVectorStore
+from felops.adapters.vector import QdrantConfig, QdrantVectorStore
 from felops.domain.retrieval_types import Filter, HybridQuery, Vector, VectorItem
 from felops.domain.workspace import NameSpace
 from felops.ports.vector import VectorStore
@@ -67,7 +67,7 @@ def _unscoped(workspace_id: str = "") -> NameSpace:
 @pytest_asyncio.fixture
 async def store() -> AsyncIterator[QdrantVectorStore]:
     client = AsyncQdrantClient(location=":memory:")
-    adapter = QdrantVectorStore(client=client, collection_name="test")
+    adapter = QdrantVectorStore(QdrantConfig(collection_name="test"), client=client)
     yield adapter
     await adapter.close()
 
@@ -83,7 +83,7 @@ class TestQdrantVectorStoreContract(_VectorStoreContract):
     @pytest_asyncio.fixture
     async def store(self) -> AsyncIterator[QdrantVectorStore]:
         client = AsyncQdrantClient(location=":memory:")
-        adapter = QdrantVectorStore(client=client, collection_name="contract")
+        adapter = QdrantVectorStore(QdrantConfig(collection_name="contract"), client=client)
         yield adapter
         await adapter.close()
 
@@ -130,21 +130,31 @@ def test_passes_client_options(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("felops.adapters.vector.qdrant.AsyncQdrantClient", FakeClient)
 
-    QdrantVectorStore(url="http://qdrant:6333", api_key="secret", timeout=12)
+    QdrantVectorStore(QdrantConfig(url="http://qdrant:6333", api_key="secret", timeout=12))
 
     assert seen == {"url": "http://qdrant:6333", "api_key": "secret", "timeout": 12}
+
+
+def test_config_from_env_uses_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QDRANT_URL", "http://qdrant:6333")
+
+    config = QdrantConfig.from_env()
+
+    assert config.url == "http://qdrant:6333"
+    assert config.collection_name == "felops_knowledge"
+    assert config.timeout == 60
 
 
 @pytest.mark.parametrize("collection_name", ["", "   "])
 def test_rejects_blank_collection_name(collection_name: str) -> None:
     with pytest.raises(ValueError, match="collection_name"):
         # The client is never used: validation fails first.
-        QdrantVectorStore(client=object(), collection_name=collection_name)
+        QdrantVectorStore(QdrantConfig(collection_name=collection_name), client=object())
 
 
 def test_rejects_non_positive_timeout() -> None:
     with pytest.raises(ValueError, match="timeout"):
-        QdrantVectorStore(client=object(), timeout=0)
+        QdrantVectorStore(QdrantConfig(timeout=0), client=object())
 
 
 # ---------------------------------------------------------------------------
@@ -251,8 +261,8 @@ class TestCollectionLifecycle:
     @pytest.mark.asyncio
     async def test_second_adapter_reuses_an_existing_collection(self) -> None:
         client = AsyncQdrantClient(location=":memory:")
-        first = QdrantVectorStore(client=client, collection_name="shared")
-        second = QdrantVectorStore(client=client, collection_name="shared")
+        first = QdrantVectorStore(QdrantConfig(collection_name="shared"), client=client)
+        second = QdrantVectorStore(QdrantConfig(collection_name="shared"), client=client)
         try:
             await first.upsert(_NS, [_item("item-1")])
             await second.upsert(_NS, [_item("item-2")])

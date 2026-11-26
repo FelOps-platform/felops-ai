@@ -18,7 +18,7 @@ import pytest
 import pytest_asyncio
 from qdrant_client import AsyncQdrantClient
 
-from felops.adapters.vector import QdrantVectorStore
+from felops.adapters.vector import QdrantConfig, QdrantVectorStore
 from tests.unit.ports.test_vector_contract import (
     TestVectorStoreContract as _VectorStoreContract,
 )
@@ -43,7 +43,7 @@ class TestQdrantVectorStoreLive(_VectorStoreContract):
             pytest.skip(f"Qdrant is not reachable at {url}: {exc}")
 
         collection = f"felops_test_{uuid.uuid4().hex}"
-        adapter = QdrantVectorStore(client=client, collection_name=collection)
+        adapter = QdrantVectorStore(QdrantConfig(collection_name=collection), client=client)
         try:
             yield adapter
         finally:

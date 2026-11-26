@@ -35,6 +35,7 @@ import asyncio
 import json
 import os
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
@@ -55,6 +56,45 @@ _ITEM_ID_KEY = "_felops_item_id"
 
 # Stable namespace for UUIDv5 point ids; changing it re-keys every point.
 _POINT_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "felops/vector-store/point")
+
+
+@dataclass(frozen=True, slots=True)
+class QdrantConfig:
+    """Connection and collection settings for `QdrantVectorStore`.
+
+    Args:
+        url: Qdrant HTTP URL (for example ``http://qdrant:6333``).  Ignored
+            when a client is injected into the adapter.
+        api_key: Optional Qdrant API key.  Ignored when a client is injected.
+        collection_name: Shared collection name.  P1 uses one collection; a
+            per-embedding-model name can be passed once the embedding model id
+            is part of the composition root.
+        timeout: Qdrant client timeout in seconds.  Ignored when a client is
+            injected.
+        distance: Vector distance used when the collection is created.
+    """
+
+    url: str | None = None
+    api_key: str | None = None
+    collection_name: str = DEFAULT_COLLECTION
+    timeout: int = 60
+    distance: models.Distance = models.Distance.COSINE
+
+    def __post_init__(self) -> None:
+        _validate_name(self.collection_name, "collection_name")
+        if self.timeout <= 0:
+            raise ValueError("timeout must be positive")
+
+    @classmethod
+    def from_env(cls) -> QdrantConfig:
+        """Build a config from ``QDRANT_URL``, the same variable compose uses."""
+        url = os.getenv("QDRANT_URL")
+        if url is None or not url.strip():
+            raise ValueError(
+                "QDRANT_URL is not set; pass a QdrantConfig or client= when "
+                "constructing QdrantVectorStore"
+            )
+        return cls(url=url)
 
 
 def _validate_name(value: str, label: str) -> None:
@@ -143,48 +183,31 @@ class QdrantVectorStore:
     """`VectorStore` backed by Qdrant.
 
     Args:
-        url: Qdrant HTTP URL (for example ``http://qdrant:6333``).  When
-            omitted, ``QDRANT_URL`` from the environment is used.  Ignored
-            when *client* is supplied.
-        api_key: Optional Qdrant API key.  Ignored when *client* is supplied.
-        collection_name: Shared collection name.  P1 uses one collection;
-            a per-embedding-model name can be passed once the embedding model
-            id is part of the composition root.
-        timeout: Qdrant client timeout in seconds.  Ignored when *client* is
-            supplied.
-        distance: Vector distance used when the collection is created.
-        client: Pre-built async client, mainly for tests.  The adapter takes
+        config: Connection and collection settings.  When omitted,
+            `QdrantConfig.from_env` reads ``QDRANT_URL``.
+        client: Pre-built async client, mainly for tests.  When supplied the
+            config's connection fields are ignored.  The adapter takes
             ownership and closes it in `close()`.
     """
 
     def __init__(
         self,
+        config: QdrantConfig | None = None,
         *,
-        url: str | None = None,
-        api_key: str | None = None,
-        collection_name: str = DEFAULT_COLLECTION,
-        timeout: int = 60,
-        distance: models.Distance = models.Distance.COSINE,
         client: AsyncQdrantClient | None = None,
     ) -> None:
-        _validate_name(collection_name, "collection_name")
-        if timeout <= 0:
-            raise ValueError("timeout must be positive")
+        config = config or QdrantConfig.from_env()
         if client is None:
-            resolved_url = url or os.getenv("QDRANT_URL")
-            if resolved_url is None or not resolved_url.strip():
-                raise ValueError(
-                    "QDRANT_URL is not set; pass url= or client= when constructing "
-                    "QdrantVectorStore"
-                )
+            if config.url is None or not config.url.strip():
+                raise ValueError("url must be a non-empty string when no client is supplied")
             client = AsyncQdrantClient(
-                url=resolved_url,
-                api_key=api_key,
-                timeout=timeout,
+                url=config.url,
+                api_key=config.api_key,
+                timeout=config.timeout,
             )
         self._client = client
-        self.collection_name = collection_name
-        self._distance = distance
+        self.collection_name = config.collection_name
+        self._distance = config.distance
         self._lock = asyncio.Lock()
         self._exists: bool | None = None
 
