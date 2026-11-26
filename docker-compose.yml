@@ -26,11 +26,13 @@ services:
       retries: 10
 
   mock-mcp:
-    build: ./mocks/mock_mcp
+    build:
+      context: .
+      dockerfile: mocks/mock_mcp/Dockerfile
     ports:
       - "9000:9000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health')"]
       interval: 5s
       retries: 10
 
