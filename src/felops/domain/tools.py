@@ -23,9 +23,11 @@ is derived from ``effect_summary`` (§4.3).
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
+
+_NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 _CATALOG_FIELDS: tuple[str, ...] = (
     "tool_id",
@@ -65,12 +67,12 @@ class ToolSpec(BaseModel, frozen=True):
         ``True`` when retired from new use (ids are never reused).
     """
 
-    tool_id: str = Field(min_length=1)
-    connector_id: str = Field(min_length=1)
+    tool_id: _NonEmptyStr
+    connector_id: _NonEmptyStr
     description: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     result_summary: str = ""
-    effect_summary: str | None = Field(default=None, min_length=1)
+    effect_summary: _NonEmptyStr | None = None
     version: int = Field(default=1, ge=1)
     deprecated: bool = False
 

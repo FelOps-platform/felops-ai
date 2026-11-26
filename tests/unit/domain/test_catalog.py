@@ -193,3 +193,40 @@ def test_unknown_tool_fields_are_ignored() -> None:
     assert tool is not None
     assert "mcp_tool" not in tool.model_dump()
     assert "future_field" not in tool.model_dump()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        "tools",
+        {"tools": {}},
+        {"tools": "lookup_order"},
+        {"tools": ["not_a_mapping"]},
+    ],
+)
+def test_invalid_root_or_tools_container_is_rejected(payload: Any) -> None:
+    with pytest.raises(ValidationError):
+        CatalogSnapshot.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tool_id": "   "},
+        {"connector_id": " \t\n "},
+        {"effect_summary": ""},
+        {"effect_summary": "   "},
+    ],
+)
+def test_blank_identifiers_and_effect_summary_are_rejected(
+    overrides: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        CatalogSnapshot.model_validate({"tools": [_entry(**overrides)]})
+
+
+@pytest.mark.parametrize("version", [0, -1])
+def test_non_positive_version_is_rejected(version: int) -> None:
+    with pytest.raises(ValidationError):
+        CatalogSnapshot.model_validate({"tools": [_entry(version=version)]})
