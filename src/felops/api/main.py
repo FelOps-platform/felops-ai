@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from felops.api.routes.messages import router as messages_router
 from felops.app.container import init_container
 
 
@@ -17,6 +18,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Felops AI", lifespan=lifespan)
+app.include_router(messages_router)
 
 
 @app.get("/health")

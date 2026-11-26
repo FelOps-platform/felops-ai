@@ -8,12 +8,14 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
 from felops.orchestrator.graph import build_graph
+from felops.services.message_service import MessageService
 
 
 @dataclass
 class Container:
     checkpointer: BaseCheckpointSaver
     graph: CompiledStateGraph
+    message_service: MessageService
 
 
 def init_container(checkpointer: BaseCheckpointSaver | None = None) -> Container:
@@ -24,4 +26,9 @@ def init_container(checkpointer: BaseCheckpointSaver | None = None) -> Container
     graph = build_graph(checkpointer=checkpointer)
     if graph.checkpointer is None:
         raise RuntimeError("Graph was built without a checkpointer.")
-    return Container(checkpointer=graph.checkpointer, graph=graph)
+    message_service = MessageService()
+    return Container(
+        checkpointer=graph.checkpointer,
+        graph=graph,
+        message_service=message_service,
+    )

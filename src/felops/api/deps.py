@@ -3,13 +3,16 @@ from __future__ import annotations
 import hmac
 import os
 from contextvars import ContextVar
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, HTTPException, Path, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langgraph.graph.state import CompiledStateGraph
 
 from felops.domain.workspace import WorkspaceContext
+
+if TYPE_CHECKING:
+    from felops.services.message_service import MessageService
 
 _workspace_ctx_var: ContextVar[WorkspaceContext | None] = ContextVar(
     "workspace_context", default=None
@@ -81,3 +84,15 @@ def get_graph(request: Request) -> CompiledStateGraph:
     if graph is None:
         raise RuntimeError("Graph has not been initialized on app.state.")
     return graph
+
+
+def get_message_service(request: Request) -> MessageService:
+    from felops.services.message_service import MessageService
+
+    container = getattr(request.app.state, "container", None)
+    if container is None:
+        raise RuntimeError("Container has not been initialized on app.state.")
+    svc = getattr(container, "message_service", None)
+    if svc is None or not isinstance(svc, MessageService):
+        raise RuntimeError("MessageService has not been initialized in the container.")
+    return svc
