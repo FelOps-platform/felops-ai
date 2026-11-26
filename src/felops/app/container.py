@@ -26,7 +26,7 @@ def init_container(checkpointer: BaseCheckpointSaver | None = None) -> Container
     graph = build_graph(checkpointer=checkpointer)
     if graph.checkpointer is None:
         raise RuntimeError("Graph was built without a checkpointer.")
-    message_service = MessageService()
+    message_service = MessageService(graph)
     return Container(
         checkpointer=graph.checkpointer,
         graph=graph,

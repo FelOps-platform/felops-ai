@@ -21,9 +21,37 @@ from felops.services.message_service import (
     ConversationBusy,
     DuplicateIdempotencyKey,
     MessageService,
+    SubmitMessageCommand,
 )
 
 router = APIRouter()
+
+
+async def _build_submit_command(
+    body: SubmitMessageRequest,
+    workspace: Annotated[WorkspaceContext, Depends(get_workspace_context)],
+    conversation_id: Annotated[str, Path(description="Conversation identifier", min_length=1)],
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1),
+    ],
+) -> SubmitMessageCommand:
+    if not idempotency_key.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Idempotency-Key header cannot be empty.",
+        )
+    return SubmitMessageCommand(
+        workspace=workspace,
+        conversation_id=conversation_id,
+        idempotency_key=idempotency_key,
+        agent_id=body.agent_id,
+        channel=body.channel,
+        content=body.content,
+        locale=body.locale,
+        sender=JobSender(id=body.sender.id, name=body.sender.name),
+        agent_config=body.agent_config,
+    )
 
 
 @router.post(
@@ -38,35 +66,13 @@ router = APIRouter()
     ),
 )
 async def submit_message(
-    body: SubmitMessageRequest,
-    workspace: Annotated[WorkspaceContext, Depends(get_workspace_context)],
-    conversation_id: Annotated[str, Path(description="Conversation identifier", min_length=1)],
-    idempotency_key: Annotated[
-        str,
-        Header(alias="Idempotency-Key", min_length=1),
-    ],
+    command: Annotated[SubmitMessageCommand, Depends(_build_submit_command)],
     graph: Annotated[CompiledStateGraph, Depends(get_graph)],
     message_service: Annotated[MessageService, Depends(get_message_service)],
 ) -> SubmitMessageResponse:
     """Handle POST /workspaces/{workspace_id}/conversations/{conversation_id}/messages."""
-    if not idempotency_key.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Idempotency-Key header cannot be empty.",
-        )
     try:
-        job = await message_service.submit_message(
-            workspace=workspace,
-            conversation_id=conversation_id,
-            idempotency_key=idempotency_key,
-            agent_id=body.agent_id,
-            channel=body.channel,
-            content=body.content,
-            locale=body.locale,
-            sender=JobSender(id=body.sender.id, name=body.sender.name),
-            agent_config=body.agent_config,
-            graph=graph,
-        )
+        job = await message_service.submit_message(command, graph=graph)
     except DuplicateIdempotencyKey as exc:
         # Return the same job_id — not an error (§7.1 contract).
         return SubmitMessageResponse(job_id=exc.existing_job.job_id)

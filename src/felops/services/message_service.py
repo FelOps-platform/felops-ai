@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage
@@ -37,6 +38,21 @@ from felops.domain.state import AgentConfig, AgentState
 from felops.domain.workspace import WorkspaceContext, make_thread_id
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SubmitMessageCommand:
+    """All inputs needed to submit an interactive message."""
+
+    workspace: WorkspaceContext
+    conversation_id: str
+    idempotency_key: str
+    agent_id: str
+    channel: str
+    content: str
+    locale: str
+    sender: JobSender | None
+    agent_config: AgentConfig
 
 
 class DuplicateIdempotencyKey(Exception):
@@ -74,11 +90,12 @@ class MessageService:
                              asyncio does not garbage-collect them mid-flight.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, graph: CompiledStateGraph | None = None) -> None:
         self._idempotency_ledger: dict[tuple[str, str], Job] = {}
         self._active_jobs: dict[tuple[str, str], Job] = {}
         self._jobs: dict[str, Job] = {}
         self._tasks: set[asyncio.Task[None]] = set()
+        self._graph = graph
 
     def get_job(self, job_id: str) -> Job | None:
         """Look up a job by id. Used by GET /jobs/{id} (task 3.5)."""
@@ -86,17 +103,8 @@ class MessageService:
 
     async def submit_message(
         self,
-        *,
-        workspace: WorkspaceContext,
-        conversation_id: str,
-        idempotency_key: str,
-        agent_id: str,
-        channel: str,
-        content: str,
-        locale: str,
-        sender: JobSender | None = None,
-        agent_config: AgentConfig,
-        graph: CompiledStateGraph,
+        command: SubmitMessageCommand | None = None,
+        **legacy,
     ) -> Job:
         """Submit a new message for processing.
 
@@ -105,14 +113,16 @@ class MessageService:
         Raises ConversationBusy if a non-terminal job is already running
         on the same conversation.
         """
+        command = self._resolve_command(command, legacy)
+
         # 1. Idempotency check
-        ledger_key = (workspace.workspace_id, idempotency_key)
+        ledger_key = (command.workspace.workspace_id, command.idempotency_key)
         existing = self._idempotency_ledger.get(ledger_key)
         if existing is not None:
             raise DuplicateIdempotencyKey(existing)
 
         # 2. One-job-per-conversation check
-        conv_key = (workspace.workspace_id, conversation_id)
+        conv_key = (command.workspace.workspace_id, command.conversation_id)
         active = self._active_jobs.get(conv_key)
         if active is not None and active.status in (
             JobStatus.QUEUED,
@@ -125,14 +135,14 @@ class MessageService:
         job = Job(
             job_type=JobType.INTERACTIVE,
             status=JobStatus.QUEUED,
-            workspace_id=workspace.workspace_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            idempotency_key=idempotency_key,
+            workspace_id=command.workspace.workspace_id,
+            agent_id=command.agent_id,
+            conversation_id=command.conversation_id,
+            idempotency_key=command.idempotency_key,
             # Stored on Job in P1 just to be ready for P4; unused in P1 graph execution.
-            locale=locale,
+            locale=command.locale,
             # Stored on Job in P1 just to be ready for P4 / downstream attribution; unused in P1.
-            sender=sender,
+            sender=command.sender,
         )
 
         # 4. Register in ledger and active-jobs index
@@ -142,24 +152,29 @@ class MessageService:
 
         # 5. Build initial AgentState
         initial_state = AgentState(
-            workspace_id=workspace.workspace_id,
-            agent_id=agent_id,
+            workspace_id=command.workspace.workspace_id,
+            agent_id=command.agent_id,
             sub_agent_id=DEFAULT_SUB_AGENT_ID,
             audience=DEFAULT_AUDIENCE,
-            channel=channel,
-            conversation_id=conversation_id,
-            agent_config=agent_config,
-            messages=[HumanMessage(content=content)],
+            channel=command.channel,
+            conversation_id=command.conversation_id,
+            agent_config=command.agent_config,
+            messages=[HumanMessage(content=command.content)],
         )
 
         # 6. Build thread config
         thread_config: RunnableConfig = {
-            "configurable": {"thread_id": make_thread_id(workspace.workspace_id, conversation_id)}
+            "configurable": {
+                "thread_id": make_thread_id(
+                    command.workspace.workspace_id,
+                    command.conversation_id,
+                )
+            }
         }
 
         # 7. Spawn background task and retain a strong reference until done
         task = asyncio.create_task(
-            self._run_graph(job, initial_state, thread_config, graph),
+            self._run_graph(job, initial_state, thread_config),
             name=f"job-{job.job_id}",
         )
         self._tasks.add(task)
@@ -167,12 +182,37 @@ class MessageService:
 
         return job
 
+    def _resolve_command(
+        self,
+        command: SubmitMessageCommand | None,
+        legacy: dict,
+    ) -> SubmitMessageCommand:
+        if command is not None:
+            graph = legacy.pop("graph", None)
+            if graph is not None:
+                self._graph = graph
+            return command
+
+        graph = legacy.pop("graph", None)
+        if graph is not None:
+            self._graph = graph
+        return SubmitMessageCommand(
+            workspace=legacy["workspace"],
+            conversation_id=legacy["conversation_id"],
+            idempotency_key=legacy["idempotency_key"],
+            agent_id=legacy["agent_id"],
+            channel=legacy["channel"],
+            content=legacy["content"],
+            locale=legacy["locale"],
+            sender=legacy.get("sender"),
+            agent_config=legacy["agent_config"],
+        )
+
     async def _run_graph(
         self,
         job: Job,
         initial_state: AgentState,
         thread_config: RunnableConfig,
-        graph: CompiledStateGraph,
     ) -> None:
         """Background task that runs the LangGraph graph.
 
@@ -183,9 +223,11 @@ class MessageService:
           - Task 3.10: call webhook sender for job.completed here.
           - Task 5.8: on startup, scan RUNNING jobs and re-enter this function.
         """
+        if self._graph is None:
+            raise RuntimeError("MessageService has not been initialized with a graph.")
         job.status = JobStatus.RUNNING
         try:
-            await graph.ainvoke(
+            await self._graph.ainvoke(
                 initial_state,
                 config=thread_config,
             )
