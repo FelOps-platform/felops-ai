@@ -119,8 +119,8 @@ class _MockMcpState:
         """Return the tool ids exposed to *workspace_id* (catalog order kept)."""
         if self.workspace_tools is None:
             return list(self.tools)
-        allowed = self.workspace_tools.get(workspace_id, ())
-        return [tool_id for tool_id in allowed if tool_id in self.tools]
+        allowed = set(self.workspace_tools.get(workspace_id, ()))
+        return [tool_id for tool_id in self.tools if tool_id in allowed]
 
     def list_tools(self, workspace_id: str) -> list[dict[str, Any]]:
         """Return MCP ``Tool`` descriptors for *workspace_id*."""
@@ -166,7 +166,7 @@ class _MockMcpState:
             return copy.deepcopy(example["result"])
         return {
             "status": "succeeded",
-            "data": {"tool_id": tool_id, **arguments},
+            "data": {**arguments, "tool_id": tool_id},
             "error": None,
         }
 
@@ -227,7 +227,8 @@ def _handle_tools_call(
     workspace_id: str,
 ) -> JSONResponse:
     name = params.get("name")
-    arguments = params.get("arguments") or {}
+    raw_arguments = params.get("arguments")
+    arguments = {} if raw_arguments is None else raw_arguments
     if not isinstance(name, str) or not name:
         return JSONResponse(_rpc_error(request_id, -32602, "tools/call requires a tool name"))
     if not isinstance(arguments, Mapping):
@@ -273,18 +274,44 @@ async def handle_rpc(request: Request) -> Response:
 
     method = payload.get("method")
     request_id = payload.get("id")
-    if not isinstance(method, str):
+    if payload.get("jsonrpc") != "2.0":
+        return JSONResponse(
+            _rpc_error(request_id, -32600, "Invalid Request: jsonrpc must be '2.0'"),
+            status_code=400,
+        )
+    if not isinstance(method, str) or not method:
         return JSONResponse(
             _rpc_error(request_id, -32600, "Invalid Request: method is required"),
             status_code=400,
         )
+    if "id" in payload and not (
+        isinstance(request_id, (str, int)) and not isinstance(request_id, bool)
+    ):
+        return JSONResponse(
+            _rpc_error(None, -32600, "Invalid Request: id must be a string or integer"),
+            status_code=400,
+        )
+
+    session_id = request.headers.get(SESSION_HEADER, "").strip()
+    if method != "initialize" and session_id:
+        session_workspace = state.sessions.get(session_id)
+        if session_workspace is None:
+            return JSONResponse(
+                _rpc_error(request_id, -32000, "Unknown MCP session"), status_code=404
+            )
+        if session_workspace != workspace_id:
+            return JSONResponse(
+                _rpc_error(request_id, -32000, "MCP session belongs to another workspace"),
+                status_code=403,
+            )
 
     # MCP notifications (e.g. notifications/initialized) carry no id and get
     # an empty 202, exactly as a real streamable-HTTP server answers.
     if "id" not in payload:
         return Response(status_code=202)
 
-    params = payload.get("params") or {}
+    raw_params = payload.get("params")
+    params = {} if raw_params is None else raw_params
     if not isinstance(params, dict):
         return JSONResponse(_rpc_error(request_id, -32602, "Invalid params"))
 

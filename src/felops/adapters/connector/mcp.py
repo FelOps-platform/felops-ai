@@ -1,10 +1,12 @@
 """MCP implementation of the `Connector` port (§4 MCP Client, §5.1).
 
 The adapter speaks the JSON-RPC subset of the Model Context Protocol over
-HTTP (streamable HTTP transport, JSON responses).  It keeps one MCP session
-per instance: ``initialize`` runs lazily on the first call, the
-``Mcp-Session-Id`` is reused afterwards and every request carries the
-protocol version header.
+HTTP (streamable HTTP transport, JSON or SSE responses).  It keeps one MCP
+session per workspace: ``initialize`` runs lazily on the first call, the
+``Mcp-Session-Id`` is reused for that workspace afterwards, and every request
+carries the protocol version header.  Sessions are never shared across
+workspaces, so one workspace can never inherit another's connection state
+(§2.3).
 
 Workspace isolation (§2.3): the AI repo never sees connector credentials.  It
 sends ``workspace_id`` on every request and the backend resolves the
@@ -14,6 +16,8 @@ Errors (§4.2): this class never raises for an execution failure.  Timeouts map
 to ``provider_error`` (retryable), unreachable or unauthorized connectors map
 to ``connector_not_connected``, and a JSON-RPC error or an ``isError`` tool
 result maps to ``ToolResult(status="failed")`` with a structured ``ToolError``.
+An expired session (HTTP 404 on a request that carried a session id) is
+re-initialized and retried once, because the request never executed.
 ``list_tools`` degrades to an empty list when the server is unreachable so a
 disconnected connector cannot crash a run.
 """
@@ -24,9 +28,11 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from felops.domain.tools import ToolError, ToolResult, ToolSpec
 from felops.domain.workspace import WorkspaceContext
@@ -40,14 +46,24 @@ PROTOCOL_HEADER = "MCP-Protocol-Version"
 IDEM_KEY_META = "felops/idem_key"
 _CLIENT_INFO = {"name": "felops-ai", "version": "0.1.0"}
 _DEFAULT_CONNECTOR_ID = "mcp"
+_MAX_TOOL_PAGES = 50
 
 
 class _McpFailure(Exception):
     """Internal carrier for a structured tool failure."""
 
-    def __init__(self, error: ToolError) -> None:
+    def __init__(self, error: ToolError, *, status_code: int | None = None) -> None:
         super().__init__(error.message)
         self.error = error
+        self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class _Session:
+    """State of one initialized MCP session for one workspace."""
+
+    session_id: str | None
+    protocol_version: str
 
 
 def _tool_error(code: str, message: str, *, retryable: bool = False) -> ToolError:
@@ -80,16 +96,17 @@ class McpConnector:
         timeout: float = 10.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not base_url:
+        if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError("base_url is required")
-        self._base_url = base_url.rstrip("/")
-        self._connector_id = connector_id
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        self._base_url = base_url.strip().rstrip("/")
+        self._endpoint = f"{self._base_url}/mcp"
+        self._connector_id = connector_id.strip() if connector_id else None
         self._timeout = timeout
         self._client = client
         self._owns_client = client is None
-        self._initialized = False
-        self._session_id: str | None = None
-        self._protocol_version: str | None = None
+        self._sessions: dict[str, _Session] = {}
         self._request_seq = 0
         self._init_lock = asyncio.Lock()
 
@@ -98,27 +115,48 @@ class McpConnector:
     async def list_tools(self, ctx: WorkspaceContext) -> list[ToolSpec]:
         """Return the tools the server exposes to *ctx*.
 
-        A disconnected connector yields an empty list (§4.2): the executor then
+        Pages through ``nextCursor`` until the server reports no more tools.  A
+        disconnected connector yields an empty list (§4.2): the executor then
         denies every call and hands off instead of raising.
         """
+        specs: list[ToolSpec] = []
         try:
-            await self._ensure_initialized(ctx)
-            result = await self._post(ctx, "tools/list", {})
+            cursor: str | None = None
+            seen: set[str] = set()
+            for _ in range(_MAX_TOOL_PAGES):
+                params = {"cursor": cursor} if cursor else {}
+                result = await self._request(ctx, "tools/list", params)
+                tools = result.get("tools")
+                if isinstance(tools, list):
+                    for tool in tools:
+                        if isinstance(tool, Mapping):
+                            spec = self._to_spec(tool)
+                            if spec is not None:
+                                specs.append(spec)
+                next_cursor = result.get("nextCursor")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    return specs
+                if next_cursor in seen:
+                    logger.warning(
+                        "mcp tools/list repeated cursor %r for workspace %s",
+                        next_cursor,
+                        ctx.workspace_id,
+                    )
+                    return specs
+                seen.add(next_cursor)
+                cursor = next_cursor
+            logger.warning(
+                "mcp tools/list stopped after %d pages for workspace %s",
+                _MAX_TOOL_PAGES,
+                ctx.workspace_id,
+            )
         except _McpFailure as exc:
             logger.warning(
-                "mcp tools/list failed for workspace %s: %s", ctx.workspace_id, exc.error.message
+                "mcp tools/list failed for workspace %s: %s",
+                ctx.workspace_id,
+                exc.error.message,
             )
             return []
-
-        tools = result.get("tools")
-        if not isinstance(tools, list):
-            return []
-        specs: list[ToolSpec] = []
-        for tool in tools:
-            if isinstance(tool, Mapping):
-                spec = self._to_spec(tool)
-                if spec is not None:
-                    specs.append(spec)
         return specs
 
     async def call(
@@ -129,9 +167,10 @@ class McpConnector:
         idem_key: str,
     ) -> ToolResult:
         """Invoke *tool* with *args*; ``idem_key`` is forwarded verbatim (§4.3)."""
+        if not isinstance(idem_key, str) or not idem_key.strip():
+            raise ValueError("idem_key is required for every connector call")
         try:
-            await self._ensure_initialized(ctx)
-            result = await self._post(
+            result = await self._request(
                 ctx,
                 "tools/call",
                 {
@@ -145,19 +184,22 @@ class McpConnector:
         return self._to_tool_result(result)
 
     async def aclose(self) -> None:
-        """Close the owned HTTP client (no-op for an injected client)."""
+        """Drop sessions and close the owned HTTP client (no-op if injected)."""
+        self._sessions.clear()
         if self._owns_client and self._client is not None:
             await self._client.aclose()
             self._client = None
 
     # -- Session ------------------------------------------------------------
 
-    async def _ensure_initialized(self, ctx: WorkspaceContext) -> None:
-        if self._initialized:
-            return
+    async def _ensure_initialized(self, ctx: WorkspaceContext) -> _Session:
+        session = self._sessions.get(ctx.workspace_id)
+        if session is not None:
+            return session
         async with self._init_lock:
-            if self._initialized:
-                return
+            session = self._sessions.get(ctx.workspace_id)
+            if session is not None:
+                return session
             result, headers = await self._post_raw(
                 ctx,
                 "initialize",
@@ -166,19 +208,33 @@ class McpConnector:
                     "capabilities": {},
                     "clientInfo": _CLIENT_INFO,
                 },
+                session=None,
             )
-            self._protocol_version = str(result.get("protocolVersion") or PROTOCOL_VERSION)
-            self._session_id = headers.get(SESSION_HEADER) or None
-            self._initialized = True
-            await self._notify(ctx, "notifications/initialized")
+            session = _Session(
+                session_id=headers.get(SESSION_HEADER) or None,
+                protocol_version=str(result.get("protocolVersion") or PROTOCOL_VERSION),
+            )
+            await self._notify(ctx, session, "notifications/initialized")
+            # Publish only after the handshake finishes, so a concurrent caller
+            # can never send a request on a half-initialized session.
+            self._sessions[ctx.workspace_id] = session
+            return session
 
-    async def _notify(self, ctx: WorkspaceContext, method: str) -> None:
+    async def _invalidate(self, ctx: WorkspaceContext, expected: _Session) -> None:
+        """Drop *expected* only, so a concurrent re-init is not evicted."""
+        async with self._init_lock:
+            if self._sessions.get(ctx.workspace_id) == expected:
+                self._sessions.pop(ctx.workspace_id, None)
+
+    async def _notify(
+        self, ctx: WorkspaceContext, session: _Session, method: str
+    ) -> None:
         client = self._client_or_create()
         try:
             await client.post(
-                "/mcp",
+                self._endpoint,
                 json={"jsonrpc": "2.0", "method": method},
-                headers=self._headers(ctx),
+                headers=self._headers(ctx, session),
             )
         except httpx.HTTPError as exc:  # notifications are fire-and-forget
             logger.debug("mcp notification %s failed: %s", method, exc)
@@ -190,36 +246,55 @@ class McpConnector:
             self._client = httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout)
         return self._client
 
-    def _headers(self, ctx: WorkspaceContext) -> dict[str, str]:
+    def _headers(self, ctx: WorkspaceContext, session: _Session | None) -> dict[str, str]:
         headers = {
             "Accept": "application/json, text/event-stream",
             WORKSPACE_HEADER: ctx.workspace_id,
         }
-        if self._session_id:
-            headers[SESSION_HEADER] = self._session_id
-        if self._protocol_version:
-            headers[PROTOCOL_HEADER] = self._protocol_version
+        if session is not None:
+            if session.session_id:
+                headers[SESSION_HEADER] = session.session_id
+            if session.protocol_version:
+                headers[PROTOCOL_HEADER] = session.protocol_version
         return headers
 
-    async def _post(
+    async def _request(
         self, ctx: WorkspaceContext, method: str, params: Mapping[str, Any]
     ) -> dict[str, Any]:
-        result, _ = await self._post_raw(ctx, method, params)
+        session = await self._ensure_initialized(ctx)
+        try:
+            result, _ = await self._post_raw(ctx, method, params, session=session)
+        except _McpFailure as exc:
+            if exc.status_code != 404 or session.session_id is None:
+                raise
+            logger.info(
+                "mcp session expired for workspace %s; re-initializing", ctx.workspace_id
+            )
+            await self._invalidate(ctx, session)
+            session = await self._ensure_initialized(ctx)
+            result, _ = await self._post_raw(ctx, method, params, session=session)
         return result
 
     async def _post_raw(
-        self, ctx: WorkspaceContext, method: str, params: Mapping[str, Any]
+        self,
+        ctx: WorkspaceContext,
+        method: str,
+        params: Mapping[str, Any],
+        session: _Session | None,
     ) -> tuple[dict[str, Any], httpx.Headers]:
         client = self._client_or_create()
         self._request_seq += 1
+        request_id = self._request_seq
         body: dict[str, Any] = {
             "jsonrpc": "2.0",
-            "id": self._request_seq,
+            "id": request_id,
             "method": method,
             "params": dict(params),
         }
         try:
-            response = await client.post("/mcp", json=body, headers=self._headers(ctx))
+            response = await client.post(
+                self._endpoint, json=body, headers=self._headers(ctx, session)
+            )
         except httpx.TimeoutException as exc:
             raise _McpFailure(
                 _tool_error(
@@ -237,10 +312,12 @@ class McpConnector:
             ) from exc
 
         if response.status_code >= 400:
-            raise _McpFailure(_rpc_error_from_response(response))
+            raise _McpFailure(
+                _rpc_error_from_response(response), status_code=response.status_code
+            )
 
         try:
-            payload = _decode_json_rpc(response)
+            payload = _decode_json_rpc(response, request_id)
         except (ValueError, json.JSONDecodeError) as exc:
             raise _McpFailure(
                 _tool_error("provider_error", f"MCP server returned invalid JSON: {exc}")
@@ -276,59 +353,93 @@ class McpConnector:
         if not connector_id:
             connector_id = _DEFAULT_CONNECTOR_ID
         parameters = tool.get("inputSchema")
-        return ToolSpec(
-            tool_id=str(tool_id),
-            connector_id=str(connector_id),
-            description=str(tool.get("description") or ""),
-            parameters=dict(parameters) if isinstance(parameters, Mapping) else {},
-            result_summary=str(published.get("result_summary") or ""),
-            effect_summary=published.get("effect_summary"),
-            version=int(published.get("version") or 1),
-            deprecated=bool(published.get("deprecated", False)),
-        )
+        effect_summary = published.get("effect_summary")
+        try:
+            return ToolSpec(
+                tool_id=str(tool_id),
+                connector_id=str(connector_id),
+                description=str(tool.get("description") or ""),
+                parameters=dict(parameters) if isinstance(parameters, Mapping) else {},
+                result_summary=str(published.get("result_summary") or ""),
+                effect_summary=effect_summary,
+                version=int(published.get("version") or 1),
+                deprecated=bool(published.get("deprecated", False)),
+            )
+        except (ValidationError, TypeError, ValueError) as exc:
+            logger.warning("skipping malformed MCP tool descriptor %r: %s", name, exc)
+            return None
 
     @staticmethod
     def _to_tool_result(result: Mapping[str, Any]) -> ToolResult:
         envelope = result.get("structuredContent")
         if not isinstance(envelope, Mapping):
             envelope = _parse_text_content(result.get("content"))
-        if not isinstance(envelope, Mapping):
-            return ToolResult(status="succeeded", data={"result": dict(result)}, error=None)
+        is_error = bool(result.get("isError"))
 
-        error_payload = envelope.get("error")
-        if result.get("isError") or envelope.get("status") == "failed":
-            error = error_payload if isinstance(error_payload, Mapping) else {}
+        if is_error:
+            text = _content_text(result.get("content"))
+            if isinstance(envelope, Mapping):
+                return _failure_from_envelope(envelope, fallback_message=text)
             return ToolResult(
                 status="failed",
                 data=None,
-                error=ToolError(
-                    code=str(error.get("code") or "provider_error"),
-                    message=str(error.get("message") or "MCP tool call failed"),
-                    retryable=bool(error.get("retryable", False)),
-                ),
+                error=_tool_error("provider_error", text or "MCP tool call failed"),
             )
 
-        data = envelope.get("data")
-        if isinstance(data, Mapping):
-            return ToolResult(status="succeeded", data=dict(data), error=None)
-        return ToolResult(status="succeeded", data=None, error=None)
+        if isinstance(envelope, Mapping):
+            if _is_execution_envelope(envelope) and envelope.get("status") == "failed":
+                return _failure_from_envelope(envelope)
+            if _is_execution_envelope(envelope):
+                data = envelope.get("data")
+                return ToolResult(
+                    status="succeeded",
+                    data=dict(data) if isinstance(data, Mapping) else None,
+                    error=None,
+                )
+            return ToolResult(status="succeeded", data=dict(envelope), error=None)
+
+        return ToolResult(status="succeeded", data={"result": dict(result)}, error=None)
 
 
-def _decode_json_rpc(response: httpx.Response) -> dict[str, Any]:
-    """Decode a JSON body or the first ``data:`` frame of an SSE response."""
-    content_type = response.headers.get("content-type", "")
+def _decode_json_rpc(response: httpx.Response, request_id: int) -> dict[str, Any]:
+    """Decode a JSON body or the SSE event carrying the matching response."""
+    content_type = response.headers.get("content-type", "").lower()
     if content_type.startswith("text/event-stream"):
-        for line in response.text.splitlines():
-            if line.startswith("data:"):
-                payload = json.loads(line[len("data:") :].strip())
-                if not isinstance(payload, dict):
-                    raise ValueError("SSE data frame is not a JSON object")
+        for payload in _parse_sse_events(response.text):
+            if payload.get("id") == request_id:
                 return payload
-        raise ValueError("SSE response carried no data frame")
+        raise ValueError(f"SSE stream carried no response for id {request_id}")
+
     payload = response.json()
     if not isinstance(payload, dict):
         raise ValueError("JSON-RPC response is not an object")
     return payload
+
+
+def _parse_sse_events(text: str) -> list[dict[str, Any]]:
+    """Parse SSE frames into JSON objects, ignoring non-JSON frames."""
+    events: list[dict[str, Any]] = []
+    data_lines: list[str] = []
+
+    def flush() -> None:
+        if not data_lines:
+            return
+        raw = "\n".join(data_lines)
+        data_lines.clear()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return
+        if isinstance(payload, dict):
+            events.append(payload)
+
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            data_lines.append(line[len("data:") :].strip())
+        elif not line.strip():
+            flush()
+    flush()
+    return events
 
 
 def _parse_text_content(content: Any) -> dict[str, Any] | None:
@@ -347,6 +458,42 @@ def _parse_text_content(content: Any) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _content_text(content: Any) -> str:
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        item["text"]
+        for item in content
+        if isinstance(item, Mapping)
+        and item.get("type") == "text"
+        and isinstance(item.get("text"), str)
+    ]
+    return "\n".join(parts).strip()
+
+
+def _is_execution_envelope(payload: Mapping[str, Any]) -> bool:
+    """Return ``True`` only for the Felops ``{status, data, error}`` envelope."""
+    return payload.get("status") in ("succeeded", "failed") and (
+        "data" in payload or "error" in payload
+    )
+
+
+def _failure_from_envelope(
+    envelope: Mapping[str, Any], fallback_message: str | None = None
+) -> ToolResult:
+    error = envelope.get("error")
+    payload = error if isinstance(error, Mapping) else {}
+    return ToolResult(
+        status="failed",
+        data=None,
+        error=ToolError(
+            code=str(payload.get("code") or "provider_error"),
+            message=str(payload.get("message") or fallback_message or "MCP tool call failed"),
+            retryable=bool(payload.get("retryable", False)),
+        ),
+    )
+
+
 def _rpc_error_from_response(response: httpx.Response) -> ToolError:
     message = f"MCP server returned HTTP {response.status_code}"
     try:
@@ -359,7 +506,8 @@ def _rpc_error_from_response(response: httpx.Response) -> ToolError:
             message = str(error["message"])
     if response.status_code in (401, 403, 404):
         return _tool_error("connector_not_connected", message)
-    return _tool_error("provider_error", message, retryable=response.status_code >= 500)
+    retryable = response.status_code >= 500 or response.status_code in (408, 429)
+    return _tool_error("provider_error", message, retryable=retryable)
 
 
 __all__ = [
