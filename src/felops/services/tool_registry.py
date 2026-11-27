@@ -35,6 +35,18 @@ def load_subagent_specs(manifest_dir: Path) -> dict[str, SubAgentSpec]:
     with zero sub-agents would silently deny every tool call.  A duplicate
     ``sub_agent_id`` is a deployment error too.
     """
+    _check_manifest_dir(manifest_dir)
+
+    specs: dict[str, SubAgentSpec] = {}
+    for path in sorted(manifest_dir.glob("*.json")):
+        if path.is_file():
+            _add_subagent_spec(specs, _load_subagent_spec(path))
+    if not specs:
+        raise ValueError(f"no sub-agent manifests found in {manifest_dir}")
+    return specs
+
+
+def _check_manifest_dir(manifest_dir: Path) -> None:
     if not manifest_dir.exists():
         raise FileNotFoundError(f"sub-agent manifest directory not found: {manifest_dir}")
     if not manifest_dir.is_dir():
@@ -42,17 +54,17 @@ def load_subagent_specs(manifest_dir: Path) -> dict[str, SubAgentSpec]:
             f"sub-agent manifest path is not a directory: {manifest_dir}"
         )
 
-    specs: dict[str, SubAgentSpec] = {}
-    for path in sorted(manifest_dir.glob("*.json")):
-        if not path.is_file():
-            continue
-        spec = SubAgentSpec.model_validate(json.loads(path.read_text(encoding="utf-8")))
-        if spec.sub_agent_id in specs:
-            raise ValueError(f"duplicate sub_agent_id in manifests: {spec.sub_agent_id}")
-        specs[spec.sub_agent_id] = spec
-    if not specs:
-        raise ValueError(f"no sub-agent manifests found in {manifest_dir}")
-    return specs
+
+def _load_subagent_spec(path: Path) -> SubAgentSpec:
+    return SubAgentSpec.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _add_subagent_spec(
+    specs: dict[str, SubAgentSpec], spec: SubAgentSpec
+) -> None:
+    if spec.sub_agent_id in specs:
+        raise ValueError(f"duplicate sub_agent_id in manifests: {spec.sub_agent_id}")
+    specs[spec.sub_agent_id] = spec
 
 
 def _validate_schemas(catalog: CatalogSnapshot) -> None:
