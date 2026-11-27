@@ -1,0 +1,12 @@
+{
+  "sub_agent_id": "customer_support",
+  "audience": "external",
+  "predefined_tool_ids": [
+    "lookup_order",
+    "refund_order",
+    "send_invoice",
+    "get_invoice",
+    "create_case",
+    "get_case"
+  ]
+}
