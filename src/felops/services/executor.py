@@ -36,6 +36,7 @@ from felops.domain.tools import (
 )
 from felops.domain.workspace import WorkspaceContext
 from felops.ports.connector import Connector
+from felops.ports.ledger import IdempotencyLedger
 from felops.services.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ class ExecutorOptions:
     retry: Mapping[SideEffectClass, RetryPolicy] | None = None
     emit: EventEmitter | None = None
     sleep: Sleeper = asyncio.sleep
+    ledger: IdempotencyLedger | None = None
 
 
 class Executor:
@@ -93,6 +95,7 @@ class Executor:
             self._retry.update(options.retry)
         self._emit = options.emit
         self._sleep = options.sleep
+        self._ledger = options.ledger
 
     async def execute(self, call: ToolCall, ctx: WorkspaceContext) -> ToolOutcome:
         """Run *call* and return the outcome with attempt metadata."""
@@ -120,10 +123,15 @@ class Executor:
                 "idem_key is required for every tool call",
             )
 
+        cached = await self._lookup(call, ctx, side_effect)
+        if cached is not None:
+            return _replay(call, side_effect, cached)
+
         self._emit_started(call, spec)
         result, attempts = await self._call_with_retry(call, ctx, spec, side_effect)
         call.outcome = result.model_dump(mode="json")
         self._emit_completed(call, spec, result)
+        await self._store(call, ctx, side_effect, result)
         return ToolOutcome(
             call_id=call.call_id,
             tool_id=call.tool_id,
@@ -149,6 +157,44 @@ class Executor:
             if not _should_retry(result, attempts, policy):
                 return result, attempts
             await self._sleep(policy.delay_after(attempts))
+
+    async def _lookup(
+        self, call: ToolCall, ctx: WorkspaceContext, side_effect: SideEffectClass
+    ) -> ToolResult | None:
+        """Return a ledgered terminal result for a side-effecting retry."""
+        if self._ledger is None or side_effect is not SideEffectClass.SIDE_EFFECTING:
+            return None
+        try:
+            return await self._ledger.get(ctx.workspace_id, call.idem_key)
+        except Exception as exc:  # the ledger is an optimisation, not a gate
+            logger.warning(
+                "idempotency ledger lookup failed for workspace %s: %s",
+                ctx.workspace_id,
+                exc,
+            )
+            return None
+
+    async def _store(
+        self,
+        call: ToolCall,
+        ctx: WorkspaceContext,
+        side_effect: SideEffectClass,
+        result: ToolResult,
+    ) -> None:
+        if self._ledger is None or side_effect is not SideEffectClass.SIDE_EFFECTING:
+            return
+        if not _is_terminal(result):
+            # A retryable failure is not terminal: caching it would poison the
+            # key and block the redelivery that could still succeed.
+            return
+        try:
+            await self._ledger.put(ctx.workspace_id, call.idem_key, result)
+        except Exception as exc:  # the backend still dedupes by idempotency key
+            logger.warning(
+                "idempotency ledger store failed for workspace %s: %s",
+                ctx.workspace_id,
+                exc,
+            )
 
     # -- events -------------------------------------------------------------
 
@@ -179,6 +225,27 @@ class Executor:
     def _emit_event(self, event_type: EventType, data: dict[str, Any]) -> None:
         if self._emit is not None:
             self._emit(event_type, data)
+
+
+def _is_terminal(result: ToolResult) -> bool:
+    """Return ``True`` when a result must never be retried again."""
+    if result.status == "succeeded":
+        return True
+    return result.error is not None and not result.error.retryable
+
+
+def _replay(
+    call: ToolCall, side_effect: SideEffectClass, result: ToolResult
+) -> ToolOutcome:
+    call.outcome = result.model_dump(mode="json")
+    return ToolOutcome(
+        call_id=call.call_id,
+        tool_id=call.tool_id,
+        side_effect_class=side_effect,
+        attempts=0,
+        deduplicated=True,
+        result=result,
+    )
 
 
 def _should_retry(result: ToolResult, attempts: int, policy: RetryPolicy) -> bool:
