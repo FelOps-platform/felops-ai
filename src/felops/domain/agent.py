@@ -13,7 +13,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # V1 constants
 
@@ -37,6 +37,36 @@ class AgentRef(BaseModel, frozen=True):
     agent_id: str = Field(min_length=1)
     sub_agent_id: str = Field(default=DEFAULT_SUB_AGENT_ID, min_length=1)
     audience: Literal["external", "internal"] = Field(default=DEFAULT_AUDIENCE)
+
+
+class SubAgentSpec(BaseModel):
+    """A sub-agent manifest (§4.2).
+
+    V1 ships one manifest, ``customer_support``.  ``predefined_tool_ids`` is
+    the platform-owned set ``P_s`` that the Tool Registry intersects with the
+    user's agent-level selection ``S``; it is versioned with the code and never
+    leaves the AI repo (§4.1 inv. 3).
+
+    Manifests are repo-owned, so unknown keys and a missing tool list are
+    rejected instead of silently producing an empty predefined set.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sub_agent_id: str = Field(min_length=1)
+    audience: Literal["external", "internal"] = Field(default=DEFAULT_AUDIENCE)
+    predefined_tool_ids: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _check_predefined_tool_ids(self) -> SubAgentSpec:
+        seen: set[str] = set()
+        for tool_id in self.predefined_tool_ids:
+            if not tool_id:
+                raise ValueError("predefined_tool_ids must not contain empty ids")
+            if tool_id in seen:
+                raise ValueError(f"duplicate predefined tool_id: {tool_id}")
+            seen.add(tool_id)
+        return self
 
 
 class HandoffReason(StrEnum):
