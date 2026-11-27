@@ -639,3 +639,48 @@ async def test_ledger_errors_fail_open(caplog: pytest.LogCaptureFixture) -> None
     assert outcome.result.status == "succeeded"
     assert len(connector.calls) == 1
     assert "idempotency ledger" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Verification contract (task 3.7, backend-owned)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_is_verified_without_a_follow_up_read_call() -> None:
+    """The backend verifies the effect; the executor must not call again."""
+    connector = ScriptedConnector([_success({"refund_id": "RFD-3081"})])
+
+    outcome = await _executor(connector).execute(_call("refund_order"), _CTX)
+
+    assert outcome.result.status == "succeeded"
+    assert len(connector.calls) == 1
+    assert connector.calls[0]["tool"] == "refund_order"
+
+
+@pytest.mark.asyncio
+async def test_failed_verification_is_never_reported_as_success() -> None:
+    events: list[tuple[EventType, dict[str, Any]]] = []
+    connector = ScriptedConnector(
+        [_failure(retryable=False, message="verification failed")]
+    )
+
+    outcome = await _executor(
+        connector, options=_options(emit=lambda kind, data: events.append((kind, data)))
+    ).execute(_call("refund_order"), _CTX)
+
+    assert outcome.result.status == "failed"
+    assert outcome.result.error is not None
+    assert outcome.result.error.message == "verification failed"
+    assert events[-1][1]["status"] == "failed"
+    assert events[-1][1]["result_summary"] == "verification failed"
+
+
+@pytest.mark.asyncio
+async def test_verified_failure_is_not_retried() -> None:
+    connector = ScriptedConnector([_failure(retryable=False)])
+
+    outcome = await _executor(connector).execute(_call("refund_order"), _CTX)
+
+    assert outcome.attempts == 1
+    assert len(connector.calls) == 1

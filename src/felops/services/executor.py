@@ -14,6 +14,11 @@ path.
 Pre-flight failures (unknown tool, blank idempotency key) never reach the
 connector and emit no ``tool.*`` events; they are returned as structured
 ``ToolResult`` failures like any other execution error.
+
+Verification is backend-owned (§4.2, §6.5 case 2): the backend checks the
+effect against the provider and returns a terminal, verified outcome.  The
+executor consumes that outcome as-is and never issues a follow-up read-only
+check, which is the task-3.7 behaviour under the finalized contract.
 """
 
 from __future__ import annotations
