@@ -5,6 +5,10 @@ x-tei-common: &tei-common
     - "--pooling"
     - "cls"
     - "--auto-truncate"
+    # Peak memory during warmup scales with this; lower it on CPU-only hosts
+    # with limited RAM (e.g. 2048) to avoid the container being OOM-killed.
+    - "--max-batch-tokens"
+    - "${TEI_MAX_BATCH_TOKENS:-16384}"
   volumes:
     - teidata:/data
   ports:
