@@ -23,6 +23,7 @@ is derived from ``effect_summary`` (§4.3).
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -37,6 +38,19 @@ _CATALOG_FIELDS: tuple[str, ...] = (
     "version",
     "deprecated",
 )
+
+
+class SideEffectClass(StrEnum):
+    """Whether a tool call can change external state (§4.3).
+
+    Derived solely from ``effect_summary``: ``None`` is read-only and a
+    deterministic template is side-effecting.  The class drives preview
+    behaviour and the executor's retry policy; it never replaces the
+    idempotency key, which every call carries.
+    """
+
+    READ_ONLY = "read_only"
+    SIDE_EFFECTING = "side_effecting"
 
 
 class ToolSpec(BaseModel, frozen=True):
@@ -75,9 +89,16 @@ class ToolSpec(BaseModel, frozen=True):
     deprecated: bool = False
 
     @property
+    def side_effect_class(self) -> SideEffectClass:
+        """Return the class implied by ``effect_summary`` (§4.3)."""
+        if self.effect_summary is None:
+            return SideEffectClass.READ_ONLY
+        return SideEffectClass.SIDE_EFFECTING
+
+    @property
     def is_side_effecting(self) -> bool:
         """Return ``True`` when the tool declares a non-null ``effect_summary``."""
-        return self.effect_summary is not None
+        return self.side_effect_class is SideEffectClass.SIDE_EFFECTING
 
 
 def effective_tools(
@@ -202,3 +223,18 @@ class CatalogSnapshot(BaseModel, frozen=True):
     def get(self, tool_id: str) -> ToolSpec | None:
         """Return the catalog entry for *tool_id*, or ``None`` when absent."""
         return next((tool for tool in self.tools if tool.tool_id == tool_id), None)
+
+
+class ToolOutcome(BaseModel, frozen=True):
+    """Result of one executor run, including retry metadata (§4 Executor).
+
+    ``side_effect_class`` makes the read/write split explicit for callers and
+    events; ``attempts`` records how many connector calls were made with the
+    same ``idem_key`` (0 for a pre-flight rejection).
+    """
+
+    call_id: str
+    tool_id: str
+    side_effect_class: SideEffectClass
+    attempts: int = Field(ge=0)
+    result: ToolResult
