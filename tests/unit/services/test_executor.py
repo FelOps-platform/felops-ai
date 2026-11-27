@@ -8,11 +8,13 @@ paths.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from felops.adapters.ledger.memory import InMemoryLedger
 from felops.domain.events import EventType
 from felops.domain.state import ToolCall
 from felops.domain.tools import CatalogSnapshot, SideEffectClass, ToolError, ToolResult
@@ -92,8 +94,11 @@ def _options(
     retry: dict[SideEffectClass, RetryPolicy] | None = None,
     emit: Any = None,
     sleep: Any = None,
+    ledger: Any = None,
 ) -> ExecutorOptions:
-    return ExecutorOptions(retry=retry, emit=emit, sleep=sleep or _noop_sleep)
+    return ExecutorOptions(
+        retry=retry, emit=emit, sleep=sleep or _noop_sleep, ledger=ledger
+    )
 
 
 def _executor(
@@ -470,3 +475,167 @@ def test_render_only_substitutes_flat_placeholders(
     template: str | None, values: dict[str, Any], expected: str
 ) -> None:
     assert _render(template, values) == expected
+
+
+# ---------------------------------------------------------------------------
+# Idempotency ledger
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_side_effecting_call_is_ledgered_and_replayed() -> None:
+    events: list[tuple[EventType, dict[str, Any]]] = []
+    ledger = InMemoryLedger()
+    connector = ScriptedConnector([_success({"refund_id": "RFD-3081"})])
+    executor = _executor(
+        connector,
+        options=_options(
+            ledger=ledger, emit=lambda kind, data: events.append((kind, data))
+        ),
+    )
+    args = {"order_number": "#1042", "amount": 120.0, "reason": "defective"}
+
+    first = await executor.execute(_call("refund_order", **args), _CTX)
+    second = await executor.execute(_call("refund_order", **args), _CTX)
+
+    assert first.attempts == 1
+    assert first.deduplicated is False
+    assert second.attempts == 0
+    assert second.deduplicated is True
+    assert second.result == first.result
+    assert len(connector.calls) == 1
+    assert [kind for kind, _ in events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_COMPLETED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reads_are_never_served_from_the_ledger() -> None:
+    ledger = InMemoryLedger()
+    connector = ScriptedConnector(
+        [_success({"order_number": "#1042"}), _success({"order_number": "#1042"})]
+    )
+    executor = _executor(connector, options=_options(ledger=ledger))
+
+    first = await executor.execute(_call("lookup_order", order_number="#1042"), _CTX)
+    second = await executor.execute(_call("lookup_order", order_number="#1042"), _CTX)
+
+    assert first.attempts == 1
+    assert second.attempts == 1
+    assert second.deduplicated is False
+    assert len(connector.calls) == 2
+    assert await ledger.get("ws-1", "idem-1") is None
+
+
+@pytest.mark.asyncio
+async def test_failed_write_is_ledgered_and_replayed() -> None:
+    ledger = InMemoryLedger()
+    connector = ScriptedConnector([_failure(retryable=False, message="provider down")])
+    executor = _executor(connector, options=_options(ledger=ledger))
+
+    first = await executor.execute(_call("refund_order"), _CTX)
+    second = await executor.execute(_call("refund_order"), _CTX)
+
+    assert first.result.status == "failed"
+    assert second.deduplicated is True
+    assert second.result == first.result
+    assert len(connector.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ledger_entries_are_scoped_by_workspace() -> None:
+    ledger = InMemoryLedger()
+    connector = ScriptedConnector([_success({"ok": True}), _success({"ok": True})])
+    executor = _executor(connector, options=_options(ledger=ledger))
+    other = WorkspaceContext(workspace_id="ws-2")
+
+    await executor.execute(_call("refund_order"), _CTX)
+    await executor.execute(_call("refund_order"), other)
+
+    assert len(connector.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_preflight_failures_are_not_ledgered() -> None:
+    ledger = InMemoryLedger()
+    connector = ScriptedConnector([_success({})])
+    executor = _executor(connector, options=_options(ledger=ledger))
+
+    await executor.execute(_call("delete_everything"), _CTX)
+
+    assert await ledger.get("ws-1", "idem-1") is None
+
+
+@pytest.mark.asyncio
+async def test_exhausted_retryable_failure_is_not_cached() -> None:
+    """A transient failure must not poison the key for a later redelivery."""
+    ledger = InMemoryLedger()
+    connector = ScriptedConnector(
+        [_failure(), _failure(), _failure(), _success({"ok": True})]
+    )
+    executor = _executor(connector, options=_options(ledger=ledger))
+
+    first = await executor.execute(_call("refund_order"), _CTX)
+    assert first.result.status == "failed"
+    assert await ledger.get("ws-1", "idem-1") is None
+
+    second = await executor.execute(_call("refund_order"), _CTX)
+
+    assert second.result.status == "succeeded"
+    assert second.attempts == 1
+    assert second.deduplicated is False
+    assert await ledger.get("ws-1", "idem-1") is not None
+
+
+@pytest.mark.asyncio
+async def test_retry_then_success_is_cached() -> None:
+    ledger = InMemoryLedger()
+    connector = ScriptedConnector([_failure(), _success({"ok": True})])
+    executor = _executor(connector, options=_options(ledger=ledger))
+
+    first = await executor.execute(_call("refund_order"), _CTX)
+    second = await executor.execute(_call("refund_order"), _CTX)
+
+    assert first.attempts == 2
+    assert second.deduplicated is True
+    assert second.result.status == "succeeded"
+    assert len(connector.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_deprecated_write_is_not_ledgered() -> None:
+    ledger = InMemoryLedger()
+    connector = ScriptedConnector([_success({})])
+    executor = _executor(
+        connector,
+        registry=_registry_with("refund_order", deprecated=True),
+        options=_options(ledger=ledger),
+    )
+
+    outcome = await executor.execute(_call("refund_order"), _CTX)
+
+    assert outcome.result.status == "failed"
+    assert await ledger.get("ws-1", "idem-1") is None
+
+
+@pytest.mark.asyncio
+async def test_ledger_errors_fail_open(caplog: pytest.LogCaptureFixture) -> None:
+    class BrokenLedger:
+        async def get(self, workspace_id: str, idem_key: str) -> None:
+            raise RuntimeError("ledger down")
+
+        async def put(
+            self, workspace_id: str, idem_key: str, result: Any
+        ) -> bool:
+            raise RuntimeError("ledger down")
+
+    caplog.set_level(logging.WARNING)
+    connector = ScriptedConnector([_success({"refund_id": "RFD-3081"})])
+    executor = _executor(connector, options=_options(ledger=BrokenLedger()))
+
+    outcome = await executor.execute(_call("refund_order"), _CTX)
+
+    assert outcome.result.status == "succeeded"
+    assert len(connector.calls) == 1
+    assert "idempotency ledger" in caplog.text

@@ -230,11 +230,13 @@ class ToolOutcome(BaseModel, frozen=True):
 
     ``side_effect_class`` makes the read/write split explicit for callers and
     events; ``attempts`` records how many connector calls were made with the
-    same ``idem_key`` (0 for a pre-flight rejection).
+    same ``idem_key`` (0 for a pre-flight rejection or a ledger replay);
+    ``deduplicated`` marks a replay served from the idempotency ledger.
     """
 
     call_id: str
     tool_id: str
     side_effect_class: SideEffectClass
     attempts: int = Field(ge=0)
+    deduplicated: bool = False
     result: ToolResult
