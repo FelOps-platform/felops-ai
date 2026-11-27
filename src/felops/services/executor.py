@@ -63,6 +63,19 @@ class RetryPolicy:
         return min(self.base_delay * 2 ** (attempt - 1), self.max_delay)
 
 
+@dataclass(frozen=True)
+class ExecutorOptions:
+    """Runtime options for one executor instance.
+
+    Grouped so the constructor stays small and callers pass only what they
+    change: per-class retry policies, an event sink and an async sleeper.
+    """
+
+    retry: Mapping[SideEffectClass, RetryPolicy] | None = None
+    emit: EventEmitter | None = None
+    sleep: Sleeper = asyncio.sleep
+
+
 class Executor:
     """Executes authorised calls and reports ``tool.*`` events."""
 
@@ -70,18 +83,16 @@ class Executor:
         self,
         registry: ToolRegistry,
         connector: Connector,
-        *,
-        retry: Mapping[SideEffectClass, RetryPolicy] | None = None,
-        emit: EventEmitter | None = None,
-        sleep: Sleeper = asyncio.sleep,
+        options: ExecutorOptions | None = None,
     ) -> None:
+        options = options or ExecutorOptions()
         self._registry = registry
         self._connector = connector
         self._retry = {side_effect: RetryPolicy() for side_effect in SideEffectClass}
-        if retry is not None:
-            self._retry.update(retry)
-        self._emit = emit
-        self._sleep = sleep
+        if options.retry is not None:
+            self._retry.update(options.retry)
+        self._emit = options.emit
+        self._sleep = options.sleep
 
     async def execute(self, call: ToolCall, ctx: WorkspaceContext) -> ToolOutcome:
         """Run *call* and return the outcome with attempt metadata."""
@@ -235,4 +246,4 @@ def _summary(spec: ToolSpec, result: ToolResult) -> str:
     return result.error.message if result.error is not None else ""
 
 
-__all__ = ["EventEmitter", "Executor", "RetryPolicy"]
+__all__ = ["EventEmitter", "Executor", "ExecutorOptions", "RetryPolicy"]

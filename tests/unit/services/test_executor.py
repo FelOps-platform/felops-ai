@@ -17,7 +17,7 @@ from felops.domain.events import EventType
 from felops.domain.state import ToolCall
 from felops.domain.tools import CatalogSnapshot, SideEffectClass, ToolError, ToolResult
 from felops.domain.workspace import WorkspaceContext
-from felops.services.executor import Executor, RetryPolicy, _render
+from felops.services.executor import Executor, ExecutorOptions, RetryPolicy, _render
 from felops.services.tool_registry import ToolRegistry, load_subagent_specs
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -87,21 +87,22 @@ def _registry_with(tool_id: str, **overrides: Any) -> ToolRegistry:
     )
 
 
+def _options(
+    *,
+    retry: dict[SideEffectClass, RetryPolicy] | None = None,
+    emit: Any = None,
+    sleep: Any = None,
+) -> ExecutorOptions:
+    return ExecutorOptions(retry=retry, emit=emit, sleep=sleep or _noop_sleep)
+
+
 def _executor(
     connector: ScriptedConnector,
     *,
     registry: ToolRegistry | None = None,
-    retry: dict[SideEffectClass, RetryPolicy] | None = None,
-    emit: Any = None,
-    sleep: Any = None,
+    options: ExecutorOptions | None = None,
 ) -> Executor:
-    return Executor(
-        registry or _registry(),
-        connector,
-        retry=retry,
-        emit=emit,
-        sleep=sleep or _noop_sleep,
-    )
+    return Executor(registry or _registry(), connector, options or _options())
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +161,9 @@ async def test_emits_tool_started_and_completed() -> None:
     )
     call = _call("refund_order", order_number="#1042", amount=120.0, reason="damaged_on_arrival")
 
-    await _executor(connector, emit=lambda kind, data: events.append((kind, data))).execute(
+    await _executor(
+        connector, options=_options(emit=lambda kind, data: events.append((kind, data)))
+    ).execute(
         call, _CTX
     )
 
@@ -197,7 +200,7 @@ async def test_emits_read_only_events_with_arguments() -> None:
     call = _call("lookup_order", order_number="#1042")
 
     await _executor(
-        connector, emit=lambda kind, data: events.append((kind, data))
+        connector, options=_options(emit=lambda kind, data: events.append((kind, data)))
     ).execute(call, _CTX)
 
     assert events[0][1]["params_summary"] == "order_number=#1042"
@@ -210,7 +213,7 @@ async def test_emits_once_per_execution_across_retries() -> None:
     connector = ScriptedConnector([_failure(), _success({"order_number": "#1042"})])
 
     await _executor(
-        connector, emit=lambda kind, data: events.append((kind, data))
+        connector, options=_options(emit=lambda kind, data: events.append((kind, data)))
     ).execute(_call("lookup_order", order_number="#1042"), _CTX)
 
     assert [kind for kind, _ in events] == [
@@ -227,7 +230,7 @@ async def test_failed_execution_emits_failed_completion() -> None:
     )
 
     await _executor(
-        connector, emit=lambda kind, data: events.append((kind, data))
+        connector, options=_options(emit=lambda kind, data: events.append((kind, data)))
     ).execute(_call("lookup_order"), _CTX)
 
     assert events[-1][0] is EventType.TOOL_COMPLETED
@@ -250,7 +253,9 @@ async def test_retries_retryable_failures_with_the_same_idem_key() -> None:
     connector = ScriptedConnector([_failure(), _success({"ok": True})])
     call = _call("lookup_order", order_number="#1042")
 
-    outcome = await _executor(connector, sleep=record_sleep).execute(call, _CTX)
+    outcome = await _executor(connector, options=_options(sleep=record_sleep)).execute(
+        call, _CTX
+    )
 
     assert outcome.result.status == "succeeded"
     assert outcome.attempts == 2
@@ -278,7 +283,7 @@ async def test_exhausted_retries_return_the_last_failure() -> None:
 
     connector = ScriptedConnector([_failure(), _failure(), _failure(message="final")])
 
-    outcome = await _executor(connector, sleep=record_sleep).execute(
+    outcome = await _executor(connector, options=_options(sleep=record_sleep)).execute(
         _call("lookup_order"), _CTX
     )
 
@@ -301,8 +306,10 @@ async def test_backoff_is_capped() -> None:
 
     await _executor(
         connector,
-        retry={side_effect: policy for side_effect in SideEffectClass},
-        sleep=record_sleep,
+        options=_options(
+            retry={side_effect: policy for side_effect in SideEffectClass},
+            sleep=record_sleep,
+        ),
     ).execute(_call("lookup_order"), _CTX)
 
     assert delays == [0.4, 0.5, 0.5]
@@ -317,8 +324,8 @@ async def test_retry_policy_is_selected_by_side_effect_class() -> None:
 
     read_connector = ScriptedConnector([_failure(), _failure(), _failure()])
     write_connector = ScriptedConnector([_failure(), _failure()])
-    executor = _executor(read_connector, retry=retry)
-    write_executor = _executor(write_connector, retry=retry)
+    executor = _executor(read_connector, options=_options(retry=retry))
+    write_executor = _executor(write_connector, options=_options(retry=retry))
 
     read_outcome = await executor.execute(_call("lookup_order"), _CTX)
     write_outcome = await write_executor.execute(_call("refund_order"), _CTX)
@@ -341,7 +348,7 @@ async def test_blank_idem_key_fails_closed() -> None:
     call = ToolCall(tool_id="lookup_order", idem_key="  ")
 
     outcome = await _executor(
-        connector, emit=lambda kind, data: events.append((kind, data))
+        connector, options=_options(emit=lambda kind, data: events.append((kind, data)))
     ).execute(call, _CTX)
 
     assert outcome.result.status == "failed"
@@ -360,7 +367,7 @@ async def test_unknown_tool_fails_closed() -> None:
     call = _call("delete_everything")
 
     outcome = await _executor(
-        connector, emit=lambda kind, data: events.append((kind, data))
+        connector, options=_options(emit=lambda kind, data: events.append((kind, data)))
     ).execute(call, _CTX)
 
     assert outcome.result.status == "failed"
@@ -395,7 +402,7 @@ async def test_deprecated_tool_is_rejected_before_the_connector() -> None:
     outcome = await _executor(
         connector,
         registry=_registry_with("lookup_order", deprecated=True),
-        emit=lambda kind, data: events.append((kind, data)),
+        options=_options(emit=lambda kind, data: events.append((kind, data))),
     ).execute(call, _CTX)
 
     assert outcome.result.status == "failed"
@@ -431,10 +438,10 @@ async def test_partial_retry_override_keeps_defaults_for_other_classes() -> None
     read_connector = ScriptedConnector([_failure(), _failure(), _failure()])
     write_connector = ScriptedConnector([_failure(), _failure()])
 
-    read_outcome = await _executor(read_connector, retry=retry).execute(
+    read_outcome = await _executor(read_connector, options=_options(retry=retry)).execute(
         _call("lookup_order"), _CTX
     )
-    write_outcome = await _executor(write_connector, retry=retry).execute(
+    write_outcome = await _executor(write_connector, options=_options(retry=retry)).execute(
         _call("refund_order"), _CTX
     )
 
