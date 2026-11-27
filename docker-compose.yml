@@ -1,3 +1,31 @@
+x-tei-common: &tei-common
+  command:
+    - "--model-id"
+    - "${EMBEDDING_MODEL_ID:-BAAI/bge-m3}"
+    - "--pooling"
+    - "cls"
+    - "--auto-truncate"
+  volumes:
+    - teidata:/data
+  ports:
+    - "${TEI_PORT:-8081}:80"
+  networks:
+    default:
+      aliases:
+        - tei
+  healthcheck:
+    test:
+      [
+        "CMD",
+        "bash",
+        "-c",
+        "exec 3<>/dev/tcp/127.0.0.1/80 && printf 'GET /health HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '^HTTP/1.1 200 OK' <&3",
+      ]
+    interval: 10s
+    timeout: 5s
+    retries: 30
+    start_period: 120s
+
 services:
   postgres:
     image: postgres:16
@@ -62,6 +90,8 @@ services:
       AI_IDENTITY_TOKEN: ${AI_IDENTITY_TOKEN:-dev_ai_token}
       API_KEY: ${API_KEY:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-}
+      EMBEDDING_URL: ${EMBEDDING_URL:-http://tei:80}
+      EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID:-BAAI/bge-m3}
     ports:
       - "8000:8000"
     depends_on:
@@ -79,6 +109,24 @@ services:
       retries: 10
       start_period: 10s
 
+  tei-cpu:
+    <<: *tei-common
+    profiles: ["cpu"]
+    image: ghcr.io/huggingface/text-embeddings-inference:${TEI_CPU_TAG:-cpu-1.10}
+
+  tei-gpu:
+    <<: *tei-common
+    profiles: ["gpu"]
+    image: ghcr.io/huggingface/text-embeddings-inference:${TEI_GPU_TAG:-1.10}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia # host needs nvidia-container-toolkit
+              count: 1
+              capabilities: [gpu]
+
 volumes:
   pgdata:
   qdrantdata:
+  teidata:

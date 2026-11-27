@@ -99,26 +99,9 @@ async def test_satisfies_port(store: QdrantVectorStore) -> None:
     assert adapter is not None
 
 
-def test_requires_url_when_no_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("QDRANT_URL", raising=False)
-    with pytest.raises(ValueError, match="QDRANT_URL"):
-        QdrantVectorStore()
-
-
-def test_reads_url_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, object] = {}
-
-    class FakeClient:
-        def __init__(self, **kwargs: object) -> None:
-            seen.update(kwargs)
-
-    monkeypatch.setattr("felops.adapters.vector.qdrant.AsyncQdrantClient", FakeClient)
-    monkeypatch.setenv("QDRANT_URL", "http://qdrant:6333")
-
-    adapter = QdrantVectorStore()
-
-    assert adapter.collection_name == "felops_knowledge"
-    assert seen["url"] == "http://qdrant:6333"
+def test_requires_url_when_no_client() -> None:
+    with pytest.raises(ValueError, match="url must be a non-empty string"):
+        QdrantVectorStore(QdrantConfig(collection_name="test"))
 
 
 def test_passes_client_options(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -130,19 +113,16 @@ def test_passes_client_options(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("felops.adapters.vector.qdrant.AsyncQdrantClient", FakeClient)
 
-    QdrantVectorStore(QdrantConfig(url="http://qdrant:6333", api_key="secret", timeout=12))
+    QdrantVectorStore(
+        QdrantConfig(
+            collection_name="felops_knowledge",
+            url="http://qdrant:6333",
+            api_key="secret",
+            timeout=12,
+        )
+    )
 
     assert seen == {"url": "http://qdrant:6333", "api_key": "secret", "timeout": 12}
-
-
-def test_config_from_env_uses_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("QDRANT_URL", "http://qdrant:6333")
-
-    config = QdrantConfig.from_env()
-
-    assert config.url == "http://qdrant:6333"
-    assert config.collection_name == "felops_knowledge"
-    assert config.timeout == 60
 
 
 @pytest.mark.parametrize("collection_name", ["", "   "])
@@ -154,7 +134,7 @@ def test_rejects_blank_collection_name(collection_name: str) -> None:
 
 def test_rejects_non_positive_timeout() -> None:
     with pytest.raises(ValueError, match="timeout"):
-        QdrantVectorStore(QdrantConfig(timeout=0), client=object())
+        QdrantVectorStore(QdrantConfig(collection_name="test", timeout=0), client=object())
 
 
 # ---------------------------------------------------------------------------

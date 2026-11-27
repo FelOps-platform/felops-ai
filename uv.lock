@@ -248,10 +248,13 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langchain-core" },
     { name = "langgraph" },
     { name = "litellm" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyyaml" },
     { name = "qdrant-client" },
     { name = "uvicorn" },
 ]
@@ -268,14 +271,17 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.156.1" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "httpx2", marker = "extra == 'dev'", specifier = "==2.15.1" },
     { name = "import-linter", marker = "extra == 'dev'", specifier = "==2.15" },
     { name = "langchain-core", specifier = "==1.6.12" },
     { name = "langgraph", specifier = "==1.2.16" },
     { name = "litellm", specifier = "==1.106.4" },
     { name = "pydantic", specifier = "==2.14.1" },
+    { name = "pydantic-settings", specifier = "==2.16.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = "==1.4.0" },
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "qdrant-client", specifier = "==1.18.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.17.1" },
     { name = "uvicorn", specifier = "==0.54.0" },

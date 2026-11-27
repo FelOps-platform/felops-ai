@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langgraph.graph.state import CompiledStateGraph
 
 from felops.domain.workspace import WorkspaceContext
+from felops.ports.embedding import EmbeddingModel
 
 _workspace_ctx_var: ContextVar[WorkspaceContext | None] = ContextVar(
     "workspace_context", default=None
@@ -81,3 +82,10 @@ def get_graph(request: Request) -> CompiledStateGraph:
     if graph is None:
         raise RuntimeError("Graph has not been initialized on app.state.")
     return graph
+
+
+def get_embedding_model(request: Request) -> EmbeddingModel:
+    embedding = getattr(request.app.state, "embedding", None)
+    if embedding is None:
+        raise RuntimeError("EmbeddingModel has not been initialized on app.state.")
+    return embedding
