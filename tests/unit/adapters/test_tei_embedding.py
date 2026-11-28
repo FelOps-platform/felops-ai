@@ -25,23 +25,16 @@ from felops.domain.retrieval_types import Vector
 from felops.ports.embedding import EmbeddingModel
 
 
-def _tei_config(
-    *,
-    model_id: str = "BAAI/bge-m3",
-    dim: int = 4,
-    batch_size: int = 32,
-    timeout: float = 30.0,
-    truncate: bool = True,
-    url: str | None = None,
-) -> TeiConfig:
-    return TeiConfig(
-        model_id=model_id,
-        dim=dim,
-        batch_size=batch_size,
-        timeout=timeout,
-        truncate=truncate,
-        url=url,
-    )
+def _tei_config(**overrides: Any) -> TeiConfig:
+    defaults: dict[str, Any] = {
+        "model_id": "BAAI/bge-m3",
+        "dim": 4,
+        "batch_size": 32,
+        "timeout": 30.0,
+        "truncate": True,
+        "url": None,
+    }
+    return TeiConfig(**{**defaults, **overrides})
 
 
 def _mock_tei_client(
@@ -149,6 +142,20 @@ async def test_embed_query_returns_dense_vector_only() -> None:
     assert vec.sparse is None
 
 
+async def _assert_embed_fails(
+    handler: Callable[[httpx.Request], httpx.Response],
+    *,
+    dim: int,
+    expected_retryable: bool,
+) -> None:
+    async with _mock_tei_client(handler) as client:
+        adapter = TeiEmbeddingModel(_tei_config(dim=dim), client=client)
+        with pytest.raises(EmbeddingError) as exc_info:
+            await adapter.embed_query("hi")
+
+    assert exc_info.value.retryable is expected_retryable
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status_code", "expected_retryable"),
@@ -158,28 +165,45 @@ async def test_http_errors_map_to_embedding_error(
     status_code: int,
     expected_retryable: bool,
 ) -> None:
-    def _handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status_code, text="error")
-
-    async with _mock_tei_client(_handler) as client:
-        adapter = TeiEmbeddingModel(_tei_config(dim=4), client=client)
-        with pytest.raises(EmbeddingError) as exc_info:
-            await adapter.embed_query("hi")
-
-    assert exc_info.value.retryable is expected_retryable
+    await _assert_embed_fails(
+        lambda _req: httpx.Response(status_code, text="error"),
+        dim=4,
+        expected_retryable=expected_retryable,
+    )
 
 
 @pytest.mark.asyncio
-async def test_transport_errors_are_retryable() -> None:
-    def _timeout_handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("timed out", request=request)
+@pytest.mark.parametrize(
+    "exc_factory",
+    [
+        lambda req: httpx.ReadTimeout("timed out", request=req),
+        lambda req: httpx.ConnectError("connection refused", request=req),
+    ],
+    ids=["read_timeout", "connect_error"],
+)
+async def test_transport_errors_are_retryable(
+    exc_factory: Callable[[httpx.Request], httpx.TransportError],
+) -> None:
+    def _error_handler(request: httpx.Request) -> httpx.Response:
+        raise exc_factory(request)
 
-    async with _mock_tei_client(_timeout_handler) as client:
-        adapter = TeiEmbeddingModel(_tei_config(dim=4), client=client)
-        with pytest.raises(EmbeddingError) as exc_info:
-            await adapter.embed_query("hi")
+    await _assert_embed_fails(_error_handler, dim=4, expected_retryable=True)
 
-    assert exc_info.value.retryable is True
+
+@pytest.mark.asyncio
+async def test_truncate_false_sent_in_payload() -> None:
+    seen_payloads: list[dict[str, Any]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen_payloads.append(body)
+        return httpx.Response(200, json=[[0.1, 0.2, 0.3] for _ in body["inputs"]])
+
+    async with _mock_tei_client(_handler) as client:
+        adapter = TeiEmbeddingModel(_tei_config(dim=3, truncate=False), client=client)
+        await adapter.embed_query("hello")
+
+    assert seen_payloads == [{"inputs": ["hello"], "truncate": False}]
 
 
 @pytest.mark.asyncio
@@ -193,15 +217,11 @@ async def test_transport_errors_are_retryable() -> None:
     ],
 )
 async def test_malformed_payload_raises_embedding_error(payload: Any) -> None:
-    def _handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=payload)
-
-    async with _mock_tei_client(_handler) as client:
-        adapter = TeiEmbeddingModel(_tei_config(dim=3), client=client)
-        with pytest.raises(EmbeddingError) as exc_info:
-            await adapter.embed_query("hi")
-
-    assert exc_info.value.retryable is False
+    await _assert_embed_fails(
+        lambda _req: httpx.Response(200, json=payload),
+        dim=3,
+        expected_retryable=False,
+    )
 
 
 @pytest.mark.asyncio
@@ -227,6 +247,14 @@ async def test_close_only_closes_owned_client() -> None:
         borrowed = TeiEmbeddingModel(_tei_config(dim=4), client=injected)
         await borrowed.close()
         assert not injected.is_closed
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_closes_owned_client() -> None:
+    async with TeiEmbeddingModel(_tei_config(url="http://tei:80", dim=4)) as adapter:
+        _ = adapter._get_client()
+        assert adapter._client is not None
+    assert adapter._client is None
 
 
 @pytest.mark.asyncio

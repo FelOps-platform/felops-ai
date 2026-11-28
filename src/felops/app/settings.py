@@ -85,17 +85,14 @@ class Settings(BaseSettings):
     def settings_customise_sources(
         cls,
         settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
+        **sources: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (
-            init_settings,
-            env_settings,
-            dotenv_settings,
+            sources["init_settings"],
+            sources["env_settings"],
+            sources["dotenv_settings"],
             YamlConfigSettingsSource(settings_cls, yaml_file=resolve_config_path()),
-            file_secret_settings,
+            sources["file_secret_settings"],
         )
 
     @model_validator(mode="after")

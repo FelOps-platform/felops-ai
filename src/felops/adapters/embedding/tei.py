@@ -48,36 +48,75 @@ class TeiConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, str) or not self.model_id.strip():
             raise ValueError("model_id must be a non-empty string")
-        if self.dim <= 0:
-            raise ValueError("dim must be positive")
-        if self.batch_size <= 0:
-            raise ValueError("batch_size must be positive")
-        if self.timeout <= 0:
-            raise ValueError("timeout must be positive")
+        _require_positive("dim", self.dim)
+        _require_positive("batch_size", self.batch_size)
+        _require_positive("timeout", self.timeout)
+
+
+def _require_positive(name: str, value: int | float) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+
+
+def _parse_float_component(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EmbeddingError("TEI returned a non-numeric vector component")
+    return float(value)
+
+
+def _parse_vector_row(row: Any, expected_dim: int) -> Vector:
+    if not isinstance(row, list) or len(row) != expected_dim:
+        actual = len(row) if isinstance(row, list) else type(row).__name__
+        raise EmbeddingError(
+            f"TEI returned unexpected vector dimension: expected {expected_dim}, got {actual}"
+        )
+    return Vector(dense=[_parse_float_component(v) for v in row], sparse=None)
 
 
 def _parse_vectors(payload: Any, expected_count: int, expected_dim: int) -> list[Vector]:
     """Validate TEI `/embed` JSON output (`list[list[float]]`) into `Vector`s."""
     if not isinstance(payload, list) or len(payload) != expected_count:
+        actual = len(payload) if isinstance(payload, list) else type(payload).__name__
         raise EmbeddingError(
-            f"TEI returned invalid batch size: expected {expected_count}, "
-            f"got {len(payload) if isinstance(payload, list) else type(payload).__name__}"
+            f"TEI returned invalid batch size: expected {expected_count}, got {actual}"
         )
+    return [_parse_vector_row(row, expected_dim) for row in payload]
 
-    vectors: list[Vector] = []
-    for row in payload:
-        if not isinstance(row, list) or len(row) != expected_dim:
-            actual = len(row) if isinstance(row, list) else type(row).__name__
-            raise EmbeddingError(
-                f"TEI returned unexpected vector dimension: expected {expected_dim}, got {actual}"
-            )
-        dense: list[float] = []
-        for value in row:
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise EmbeddingError("TEI returned a non-numeric vector component")
-            dense.append(float(value))
-        vectors.append(Vector(dense=dense, sparse=None))
-    return vectors
+
+def _decode_embed_response(response: httpx.Response) -> Any:
+    """Map HTTP status errors and decode JSON from a TEI `/embed` response."""
+    if response.status_code >= 500 or response.status_code in _RETRYABLE_STATUS:
+        raise EmbeddingError(
+            f"TEI server error (status={response.status_code})",
+            retryable=True,
+        )
+    if response.status_code >= 400:
+        raise EmbeddingError(
+            f"TEI rejected request (status={response.status_code})",
+            retryable=False,
+        )
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise EmbeddingError("TEI returned invalid JSON", retryable=False) from exc
+
+
+async def _post_embed(
+    client: httpx.AsyncClient,
+    batch: list[str],
+    truncate: bool,
+) -> httpx.Response:
+    """Send a `POST /embed` request and map transport failures to `EmbeddingError`."""
+    try:
+        return await client.post("/embed", json={"inputs": batch, "truncate": truncate})
+    except httpx.TimeoutException as exc:
+        raise EmbeddingError(
+            f"TEI request timed out: {type(exc).__name__}", retryable=True
+        ) from exc
+    except httpx.TransportError as exc:
+        raise EmbeddingError(
+            f"TEI transport error: {type(exc).__name__}", retryable=True
+        ) from exc
 
 
 class TeiEmbeddingModel:
@@ -115,37 +154,8 @@ class TeiEmbeddingModel:
         return self._client
 
     async def _embed_batch(self, batch: list[str]) -> list[Vector]:
-        client = self._get_client()
-        try:
-            response = await client.post(
-                "/embed",
-                json={"inputs": batch, "truncate": self._config.truncate},
-            )
-        except httpx.TimeoutException as exc:
-            raise EmbeddingError(
-                f"TEI request timed out: {type(exc).__name__}", retryable=True
-            ) from exc
-        except httpx.TransportError as exc:
-            raise EmbeddingError(
-                f"TEI transport error: {type(exc).__name__}", retryable=True
-            ) from exc
-
-        if response.status_code >= 500 or response.status_code in _RETRYABLE_STATUS:
-            raise EmbeddingError(
-                f"TEI server error (status={response.status_code})",
-                retryable=True,
-            )
-        if response.status_code >= 400:
-            raise EmbeddingError(
-                f"TEI rejected request (status={response.status_code})",
-                retryable=False,
-            )
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise EmbeddingError("TEI returned invalid JSON", retryable=False) from exc
-
+        response = await _post_embed(self._get_client(), batch, self._config.truncate)
+        payload = _decode_embed_response(response)
         return _parse_vectors(payload, expected_count=len(batch), expected_dim=self.dim)
 
     async def embed_documents(self, texts: list[str]) -> list[Vector]:

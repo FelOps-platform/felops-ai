@@ -5,10 +5,11 @@ x-tei-common: &tei-common
     - "--pooling"
     - "cls"
     - "--auto-truncate"
-    # Peak memory during warmup scales with this; lower it on CPU-only hosts
-    # with limited RAM (e.g. 2048) to avoid the container being OOM-killed.
+    # Peak memory during warmup scales with this; 2048 keeps first-run CPU
+    # memory low. With --auto-truncate this is also the per-input cap, so long
+    # chunks are silently truncated; raise it on GPU/high-RAM hosts.
     - "--max-batch-tokens"
-    - "${TEI_MAX_BATCH_TOKENS:-16384}"
+    - "${TEI_MAX_BATCH_TOKENS:-2048}"
   volumes:
     - teidata:/data
   ports:
@@ -25,10 +26,12 @@ x-tei-common: &tei-common
         "-c",
         "exec 3<>/dev/tcp/127.0.0.1/80 && printf 'GET /health HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '^HTTP/1.1 200 OK' <&3",
       ]
+    # First run downloads ~2.27 GB of BGE-M3 weights into the teidata volume.
+    # 10 min grace + 120 x 10 s retries = up to 30 min.
     interval: 10s
-    timeout: 5s
-    retries: 30
-    start_period: 120s
+    timeout: 10s
+    retries: 120
+    start_period: 600s
 
 services:
   postgres:
@@ -94,7 +97,9 @@ services:
       AI_IDENTITY_TOKEN: ${AI_IDENTITY_TOKEN:-dev_ai_token}
       API_KEY: ${API_KEY:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-}
-      EMBEDDING_URL: ${EMBEDDING_URL:-http://tei:80}
+      # Hardcoded container-internal URL; .env keeps the host-side
+      # http://localhost:8081 for live tests.
+      EMBEDDING_URL: http://tei:80
       EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID:-BAAI/bge-m3}
     ports:
       - "8000:8000"
@@ -107,11 +112,28 @@ services:
         condition: service_healthy
       mock-backend:
         condition: service_healthy
+      # Only one TEI profile is active at a time. required:false ignores the
+      # inactive profile instead of failing with "undefined service"; when
+      # active, Compose waits for its healthcheck.
+      tei-cpu:
+        condition: service_healthy
+        required: false
+      tei-gpu:
+        condition: service_healthy
+        required: false
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      # api is ready only when both its own /health and TEI /health answer.
+      # The shared "tei" alias works for either profile.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=3); u.urlopen('http://tei:80/health', timeout=3)",
+        ]
       interval: 5s
-      retries: 10
-      start_period: 10s
+      retries: 30
+      start_period: 30s
 
   tei-cpu:
     <<: *tei-common
@@ -121,6 +143,8 @@ services:
   tei-gpu:
     <<: *tei-common
     profiles: ["gpu"]
+    # 1.10 is the default for server/datacenter Ampere (A100); override
+    # TEI_GPU_TAG for RTX 2050/30xx/A10 (86-1.10), Ada (89-1.10), or T4 (turing-1.10).
     image: ghcr.io/huggingface/text-embeddings-inference:${TEI_GPU_TAG:-1.10}
     deploy:
       resources:

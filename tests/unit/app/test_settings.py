@@ -75,3 +75,43 @@ def test_blank_urls_require_explicit_configuration(monkeypatch: pytest.MonkeyPat
         settings.to_tei_config()
     with pytest.raises(ValueError, match="QDRANT_URL"):
         settings.to_qdrant_config()
+
+
+def test_felops_config_path_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for var in (
+        "EMBEDDING_URL",
+        "EMBEDDING_MODEL_ID",
+        "EMBEDDING_DIM",
+        "EMBEDDING__BATCH_SIZE",
+        "QDRANT_URL",
+        "QDRANT_API_KEY",
+        "VECTOR__COLLECTION_NAME",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    custom_yaml = tmp_path / "custom.yaml"
+    custom_yaml.write_text(
+        "embedding:\n"
+        "  model_id: custom/model\n"
+        "  dim: 512\n"
+        "  batch_size: 8\n"
+        "  timeout: 12.5\n"
+        "  truncate: false\n"
+        "vector:\n"
+        "  collection_name: custom_yaml_collection\n"
+        "  timeout: 15\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FELOPS_CONFIG_PATH", str(custom_yaml))
+
+    settings = Settings(_env_file=None)
+
+    assert settings.embedding.model_id == "custom/model"
+    assert settings.embedding.dim == 512
+    assert settings.embedding.batch_size == 8
+    assert settings.embedding.timeout == 12.5
+    assert settings.embedding.truncate is False
+    assert settings.vector.collection_name == "custom_yaml_collection"
+    assert settings.vector.timeout == 15
