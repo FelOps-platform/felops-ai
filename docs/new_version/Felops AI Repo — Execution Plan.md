@@ -44,7 +44,7 @@
 | ID | Task | Module (§) | Own | Days | Dep | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1.1 | Qdrant VectorStore adapter; workspace scoping derived from `NameSpace` | §2.3, §5.1 | B | 2 | 0.5 | Namespace isolation test passes |
-| 1.2 | BGE-M3 EmbeddingModel in thread pool | §3, §4 Embedding | B | 2 | 0.5 | API loop not blocked |
+| 1.2 | BGE-M3 EmbeddingModel via external TEI service over async HTTP | §3, §4 Embedding | B | 2 | 0.5 | API loop not blocked; TEI requests are asynchronous |
 | 1.3 | Ingestion v0: text/TXT → fixed chunks → embed → upsert | §8.5 | B | 3 | 1.1, 1.2 | Chunks in Qdrant |
 | 1.4 | Retriever v0: dense top-k with citations | §4 Retriever | B | 2 | 1.3 | Recall on 5 Q&A |
 | 1.5 | Graph v1: guardrails stub → router (rules) → retriever → reasoner → responder | §6.3 | A | 4 | 0.9, 1.4 | Grounded answer |

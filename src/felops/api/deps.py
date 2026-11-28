@@ -10,6 +10,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langgraph.graph.state import CompiledStateGraph
 
 from felops.domain.workspace import WorkspaceContext
+from felops.ports.embedding import EmbeddingModel
+from felops.ports.vector import VectorStore
 
 _workspace_ctx_var: ContextVar[WorkspaceContext | None] = ContextVar(
     "workspace_context", default=None
@@ -81,3 +83,17 @@ def get_graph(request: Request) -> CompiledStateGraph:
     if graph is None:
         raise RuntimeError("Graph has not been initialized on app.state.")
     return graph
+
+
+def get_embedding_model(request: Request) -> EmbeddingModel:
+    embedding = getattr(request.app.state, "embedding", None)
+    if embedding is None:
+        raise RuntimeError("EmbeddingModel has not been initialized on app.state.")
+    return embedding
+
+
+def get_vector_store(request: Request) -> VectorStore:
+    vector_store = getattr(request.app.state, "vector_store", None)
+    if vector_store is None:
+        raise RuntimeError("VectorStore has not been initialized on app.state.")
+    return vector_store

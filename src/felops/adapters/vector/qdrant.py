@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -44,8 +43,6 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 from felops.domain.retrieval_types import Filter, Hit, HybridQuery, Vector, VectorItem
 from felops.domain.workspace import NameSpace
-
-DEFAULT_COLLECTION = "felops_knowledge"
 
 # Namespace fields are written after the caller payload, so a payload key with
 # the same name can never spoof another workspace.
@@ -62,21 +59,22 @@ _POINT_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "felops/vector-store/point"
 class QdrantConfig:
     """Connection and collection settings for `QdrantVectorStore`.
 
+    Constructed centrally by `felops.app.settings.Settings.to_qdrant_config()`
+    (or directly in tests).
+
     Args:
+        collection_name: Shared collection name.
         url: Qdrant HTTP URL (for example ``http://qdrant:6333``).  Ignored
             when a client is injected into the adapter.
         api_key: Optional Qdrant API key.  Ignored when a client is injected.
-        collection_name: Shared collection name.  P1 uses one collection; a
-            per-embedding-model name can be passed once the embedding model id
-            is part of the composition root.
         timeout: Qdrant client timeout in seconds.  Ignored when a client is
             injected.
         distance: Vector distance used when the collection is created.
     """
 
+    collection_name: str
     url: str | None = None
     api_key: str | None = None
-    collection_name: str = DEFAULT_COLLECTION
     timeout: int = 60
     distance: models.Distance = models.Distance.COSINE
 
@@ -84,17 +82,6 @@ class QdrantConfig:
         _validate_name(self.collection_name, "collection_name")
         if self.timeout <= 0:
             raise ValueError("timeout must be positive")
-
-    @classmethod
-    def from_env(cls) -> QdrantConfig:
-        """Build a config from ``QDRANT_URL``, the same variable compose uses."""
-        url = os.getenv("QDRANT_URL")
-        if url is None or not url.strip():
-            raise ValueError(
-                "QDRANT_URL is not set; pass a QdrantConfig or client= when "
-                "constructing QdrantVectorStore"
-            )
-        return cls(url=url)
 
 
 def _validate_name(value: str, label: str) -> None:
@@ -201,8 +188,7 @@ class QdrantVectorStore:
     """`VectorStore` backed by Qdrant.
 
     Args:
-        config: Connection and collection settings.  When omitted,
-            `QdrantConfig.from_env` reads ``QDRANT_URL``.
+        config: Connection and collection settings.
         client: Pre-built async client, mainly for tests.  When supplied the
             config's connection fields are ignored.  The adapter takes
             ownership and closes it in `close()`.
@@ -210,11 +196,10 @@ class QdrantVectorStore:
 
     def __init__(
         self,
-        config: QdrantConfig | None = None,
+        config: QdrantConfig,
         *,
         client: AsyncQdrantClient | None = None,
     ) -> None:
-        config = config or QdrantConfig.from_env()
         if client is None:
             if config.url is None or not config.url.strip():
                 raise ValueError("url must be a non-empty string when no client is supplied")
